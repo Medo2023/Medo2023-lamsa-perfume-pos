@@ -1,0 +1,163 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedInWithGoogle() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function memberProfilePath() {
+      return /databases/$(database)/documents/authorized_users/$(request.auth.token.email);
+    }
+
+    function hasProfile() {
+      return signedInWithGoogle() && exists(memberProfilePath());
+    }
+
+    function memberProfile() {
+      return get(memberProfilePath()).data;
+    }
+
+    function activeMember() {
+      return hasProfile() && memberProfile().isActive == true;
+    }
+
+    function isOwner() {
+      return activeMember() && memberProfile().role == 'OWNER';
+    }
+
+    function hasPermission(permission) {
+      return isOwner()
+        || (activeMember() && memberProfile().permissions[permission] == true);
+    }
+
+    function stockOnlyUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock_grams']);
+    }
+
+    match /authorized_users/{email} {
+      allow get: if signedInWithGoogle() && request.auth.token.email == email;
+      allow list: if hasPermission('canManageUsers');
+      allow create, update, delete: if hasPermission('canManageUsers');
+    }
+
+    match /app_users/{userId} {
+      allow read, write: if hasPermission('canManageUsers');
+    }
+
+    match /sales/{saleId} {
+      allow read: if activeMember();
+      allow create: if hasPermission('canRecordSale');
+      allow update: if hasPermission('canRecordSale') || hasPermission('canCancelSale');
+      allow delete: if hasPermission('canCancelSale');
+    }
+
+    match /products/{productId} {
+      allow read: if activeMember();
+      allow create, delete: if hasPermission('canEditProductCost') || hasPermission('canEditProductPrice');
+      allow update: if hasPermission('canEditProductCost')
+        || hasPermission('canEditProductPrice')
+        || ((hasPermission('canRecordSale') || hasPermission('canRecordShortage') || hasPermission('canStockCheck'))
+          && stockOnlyUpdate());
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if hasPermission('canViewExpenses') || hasPermission('canEditBudget');
+      allow create, update, delete: if hasPermission('canEditBudget');
+    }
+
+    match /settings/{settingId} {
+      allow read: if activeMember();
+      allow write: if hasPermission('canManageSettings');
+    }
+
+    match /bottleSizes/{bottleId} {
+      allow read: if activeMember();
+      allow write: if hasPermission('canEditProductCost') || hasPermission('canEditProductPrice');
+    }
+
+    match /vaults/{vaultId} {
+      allow read: if hasPermission('canViewVaults');
+      allow write: if hasPermission('canApproveWithdrawal')
+        || hasPermission('canTransferBetweenVaults')
+        || hasPermission('canInjectCapital')
+        || hasPermission('canEditBudget');
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow read: if hasPermission('canViewVaults')
+        || hasPermission('canApproveWithdrawal')
+        || hasPermission('canRequestWithdrawal');
+      allow create: if hasPermission('canRequestWithdrawal') || hasPermission('canApproveWithdrawal');
+      allow update: if hasPermission('canApproveWithdrawal');
+      allow delete: if isOwner();
+    }
+
+    match /staff_attendance/{attendanceId} {
+      allow read: if activeMember();
+      allow create, update: if hasPermission('canLogFieldActivity')
+        || hasPermission('canOpenDay')
+        || hasPermission('canCloseDay');
+      allow delete: if isOwner();
+    }
+
+    match /production_batches/{batchId} {
+      allow read: if activeMember();
+      allow create, update: if hasPermission('canEditProductCost') || hasPermission('canViewStock');
+      allow delete: if hasPermission('canEditProductCost');
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if hasPermission('canViewAuditLog');
+      allow create: if activeMember();
+      allow update, delete: if isOwner();
+    }
+
+    match /daily_closures/{closureId} {
+      allow read: if activeMember();
+      allow create, update: if hasPermission('canCloseDay') || hasPermission('canOpenDay');
+      allow delete: if isOwner();
+    }
+
+    match /purchase_requests/{requestId} {
+      allow read, write: if hasPermission('canCreatePurchaseRequest');
+    }
+
+    match /customer_requests/{requestId} {
+      allow read, write: if hasPermission('canManageCustomers') || hasPermission('canRecordSale');
+    }
+
+    match /stock_checks/{checkId} {
+      allow read, write: if hasPermission('canStockCheck');
+    }
+
+    match /replenishment_orders/{orderId} {
+      allow read, write: if hasPermission('canCreatePurchaseRequest');
+    }
+
+    match /fragrance_database/{profileId} {
+      allow read: if activeMember();
+      allow write: if hasPermission('canEditProductCost') || hasPermission('canManageSettings');
+    }
+
+    match /customers/{customerId} {
+      allow read, write: if hasPermission('canManageCustomers');
+    }
+
+    match /saved_mixes/{mixId} {
+      allow read: if activeMember();
+      allow write: if hasPermission('canRecordSale') || hasPermission('canEditProductCost');
+    }
+
+    match /test/{docId} {
+      allow read: if activeMember();
+      allow write: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

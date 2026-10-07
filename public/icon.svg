@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141416"/>
+      <stop offset="50%" stop-color="#1D1D20"/>
+      <stop offset="100%" stop-color="#0A0A0C"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FBF0B9"/>
+      <stop offset="35%" stop-color="#D4AF37"/>
+      <stop offset="70%" stop-color="#AA771C"/>
+      <stop offset="100%" stop-color="#FDF6C7"/>
+    </linearGradient>
+    <linearGradient id="goldSoft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#D4AF37" stop-opacity="0.05"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="508" height="508" x="2" y="2" rx="110" fill="none" stroke="url(#gold)" stroke-width="2.5" stroke-opacity="0.4"/>
+
+  <!-- Glowing Aura -->
+  <circle cx="256" cy="246" r="160" fill="url(#goldSoft)" filter="url(#glow)"/>
+
+  <!-- Bottle Cap (Crown) -->
+  <path d="M 216 116 L 296 116 L 286 156 L 226 156 Z" fill="url(#gold)"/>
+  <rect x="236" y="96" width="40" height="20" rx="4" fill="url(#gold)"/>
+  
+  <!-- Spray Collar -->
+  <rect x="232" y="156" width="48" height="16" rx="3" fill="#D4AF37" stroke="#FBF0B9" stroke-width="1"/>
+
+  <!-- Crystal Perfume Bottle Body -->
+  <path d="M 166 196 C 166 182, 180 172, 196 172 L 316 172 C 332 172, 346 182, 346 196 L 366 346 C 368 368, 350 388, 328 388 L 184 388 C 162 388, 144 368, 146 346 Z" fill="#1A1A1E" stroke="url(#gold)" stroke-width="5"/>
+
+  <!-- Inner Liquid Shimmer -->
+  <path d="M 176 226 L 336 226 L 350 340 C 352 358, 338 374, 320 374 L 192 374 C 174 374, 160 358, 162 340 Z" fill="url(#goldSoft)"/>
+
+  <!-- Diamond Facet Highlights -->
+  <line x1="166" y1="196" x2="256" y2="280" stroke="url(#gold)" stroke-width="2" stroke-opacity="0.6"/>
+  <line x1="346" y1="196" x2="256" y2="280" stroke="url(#gold)" stroke-width="2" stroke-opacity="0.6"/>
+  <line x1="256" y1="280" x2="256" y2="388" stroke="url(#gold)" stroke-width="2" stroke-opacity="0.6"/>
+
+  <!-- Royal Crest Emblem in Center -->
+  <circle cx="256" cy="296" r="32" fill="#141416" stroke="url(#gold)" stroke-width="3"/>
+  <path d="M 256 278 L 264 292 L 278 296 L 268 306 L 270 320 L 256 312 L 242 320 L 244 306 L 234 296 L 248 292 Z" fill="url(#gold)"/>
+
+  <!-- Arabic Typography 'لمسة عطر' -->
+  <text x="256" y="440" font-family="'Cairo', 'Readex Pro', sans-serif" font-size="34" font-weight="900" fill="url(#gold)" text-anchor="middle" letter-spacing="1">
+    لَـمْـسَـةُ عِـطْـر
+  </text>
+  <text x="256" y="470" font-family="'Readex Pro', sans-serif" font-size="14" font-weight="600" fill="#A0A0A5" text-anchor="middle" letter-spacing="3">
+    LUXURY PERFUMES POS
+  </text>
+</svg>

@@ -1,0 +1,10 @@
+{
+  "name": "Remix Remix Remix Remix Remix لمسة عطر - إدارة متجر العطور",
+  "description": "نظام ويب تقدمي لإدارة متاجر العطور، حساب التكاليف، إدارة المخزون بالجرام، وتقارير الأرباح.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
