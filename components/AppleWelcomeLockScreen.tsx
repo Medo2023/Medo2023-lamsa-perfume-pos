@@ -169,7 +169,7 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
             {isSigningIn ? (
               <><span className="w-5 h-5 rounded-full border-2 border-slate-950 border-t-transparent animate-spin" /><span>جارٍ التحقق من الحساب والصلاحية…</span></>
             ) : (
-              <><span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-base font-black text-[#4285F4]">G</span><span>{isOnline ? 'المتابعة باستخدام Google' : 'يتطلب أول دخول اتصالًا بالإنترنت'}</span></>
+              <><span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-base font-black text-[#4285F4]">G</span><span>{isOnline ? ((error || authRestoreError) ? 'إعادة المحاولة أو اختيار حساب آخر' : 'المتابعة باستخدام Google') : 'يتطلب أول دخول اتصالًا بالإنترنت'}</span></>
             )}
           </button>
 
@@ -179,6 +179,10 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
 
           <p className="text-[10px] text-amber-200/80 text-center leading-5">
             إذا طلب Google إثبات هويتك على الهاتف، اضغط «نعم» ثم اختر الرقم المطابق؛ الضغط على «لا» يرفض الدخول. إذا ظهرت «أخفق التحقق»، اضغط «إعادة المحاولة».
+          </p>
+
+          <p className="text-[10px] text-zinc-400 text-center leading-5">
+            إذا عادتك هذه الشاشة بعد تأكيد Google، اضغط «إعادة المحاولة»؛ سيُفحص الحساب المحفوظ أولاً قبل فتح نافذة جديدة.
           </p>
 
           <p className="text-[10px] text-zinc-400 text-center leading-5">

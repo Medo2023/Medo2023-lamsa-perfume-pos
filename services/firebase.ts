@@ -138,20 +138,25 @@ export const loadAuthorizedAppUser = async (firebaseUser: User): Promise<AppUser
 };
 
 export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser> => {
+  const existingUser = auth.currentUser;
+  if (existingUser) {
+    try {
+      return await loadAuthorizedAppUser(existingUser);
+    } catch (error) {
+      if (isTransientFirebaseError(error)) throw error;
+      const code = (error as { code?: string } | null)?.code || '';
+      if (code === 'permission-denied' || code === 'unauthenticated') throw error;
+      // If this Google account has no active employee profile, let the user choose another account.
+    }
+  }
+
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
   // GitHub Pages is cross-origin from Firebase authDomain. Firebase recommends
   // popup sign-in for non-Firebase hosting to avoid redirect storage loops.
-  try {
-    const credential = await signInWithPopup(auth, provider);
-    return await loadAuthorizedAppUser(credential.user);
-  } catch (error) {
-    if (!isTransientFirebaseError(error)) {
-      await signOut(auth).catch(() => {});
-    }
-    throw error;
-  }
+  const credential = await signInWithPopup(auth, provider);
+  return await loadAuthorizedAppUser(credential.user);
 };
 
 export const onFirebaseAuthStateChanged = (callback: (firebaseUser: User | null) => void) =>
@@ -179,6 +184,12 @@ export const getGoogleSignInErrorMessage = (error: unknown): string => {
   }
   if (code === 'auth/network-request-failed' || code === 'unavailable') {
     return 'تعذّر الاتصال بخدمة Google أو Firebase. تحقق من الإنترنت ثم أعد المحاولة.';
+  }
+  if (code === 'permission-denied') {
+    return 'تم تسجيل حساب Google، لكن Firestore رفض قراءة ملف الصلاحيات. ستبقى بيانات المتجر مقفلة حتى تُراجع صلاحيات Firebase.';
+  }
+  if (code === 'unauthenticated') {
+    return 'انتهت جلسة Firebase قبل تحميل الصلاحيات. أعد المحاولة من زر الدخول.';
   }
   return error instanceof Error && !error.message.startsWith('Firebase: Error (')
     ? error.message

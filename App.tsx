@@ -1689,6 +1689,8 @@ const App: React.FC = () => {
     const restoreSavedSession = async (firebaseUser: Parameters<typeof loadAuthorizedAppUser>[0]) => {
       const attempt = ++restoreAttempt;
       setIsCheckingSavedSession(true);
+      setSavedSessionUser(null);
+      setAuthRestoreError(null);
       try {
         const appUser = await loadAuthorizedAppUser(firebaseUser);
         if (!active || attempt !== restoreAttempt) return;
@@ -1697,11 +1699,10 @@ const App: React.FC = () => {
       } catch (error) {
         if (!active || attempt !== restoreAttempt) return;
         if (isTransientFirebaseError(error)) {
-          setAuthRestoreError('تعذر تحميل صلاحيات الحساب المحفوظة. اتصل بالإنترنت وسجّل الدخول مرة واحدة على هذا الجهاز أولاً.');
+          setAuthRestoreError('تم تسجيل حساب Google، لكن تعذّر تحميل صلاحيات المتجر الآن. تحقق من الاتصال ثم اضغط إعادة المحاولة؛ لن تحتاج إلى بدء Google من جديد إذا كانت جلستك محفوظة.');
         } else {
           setSavedSessionUser(null);
           setAuthRestoreError(getGoogleSignInErrorMessage(error));
-          signOutFirebaseUser().catch(() => {});
         }
       } finally {
         if (active && attempt === restoreAttempt) setIsCheckingSavedSession(false);
