@@ -177,6 +177,10 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
             سيفتح Google في نافذة منفصلة؛ أكمل الدخول وانتظر عودتك تلقائياً إلى الموقع. إذا حظر المتصفح النافذة، اسمح بالنوافذ المنبثقة لهذا الموقع.
           </p>
 
+          <p className="text-[10px] text-amber-200/80 text-center leading-5">
+            إذا طلب Google إثبات هويتك على الهاتف، اضغط «نعم» ثم اختر الرقم المطابق؛ الضغط على «لا» يرفض الدخول. إذا ظهرت «أخفق التحقق»، اضغط «إعادة المحاولة».
+          </p>
+
           <p className="text-[10px] text-zinc-400 text-center leading-5">
             إذا فتحت الرابط داخل واتساب أو متصفح مضمّن، اضغط رمز الفتح الخارجي أعلى الشاشة واختر Chrome أو Safari؛ بعض المتصفحات المضمّنة تمنع تسجيل Google.
           </p>

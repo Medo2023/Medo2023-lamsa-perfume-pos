@@ -169,7 +169,7 @@ export const getGoogleSignInErrorMessage = (error: unknown): string => {
     return 'حظر المتصفح نافذة Google. اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
   }
   if (code === 'auth/popup-closed-by-user' || code === 'auth/redirect-cancelled-by-user') {
-    return 'أُغلقت نافذة Google قبل اكتمال الدخول. أعد المحاولة واترك النافذة حتى تعود إلى الموقع.';
+    return 'لم يكتمل تسجيل Google. إذا طلب إثبات هويتك على الهاتف، اضغط «نعم» ثم اختر الرقم المطابق؛ الضغط على «لا» يرفض الدخول. إذا ظهرت صفحة «أخفق التحقق»، اضغط «إعادة المحاولة».';
   }
   if (code === 'auth/web-storage-unsupported' || code === 'auth/operation-not-supported-in-this-environment') {
     return 'هذا المتصفح لا يدعم نافذة تسجيل Google. افتح الرابط مباشرة في Chrome أو Safari ثم أعد المحاولة.';
