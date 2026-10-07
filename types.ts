@@ -3887,7 +3887,7 @@ export const TAREK_OPERATIONAL_PERMISSIONS: UserPermissions = {
   canStockCheck: true,
   canCreatePurchaseRequest: true,
   canEditProductCost: false, // STRICTLY FORBIDDEN (سر تجاري - تكلفة الخامات)
-  canEditProductPrice: false, // STRICTLY FORBIDDEN (سر تجاري - تسعير النظام الأساسي)
+  canEditProductPrice: true, // Retail-price operations only; confidential cost fields remain isolated.
   canOpenDay: true,
   canCloseDay: true,
   canReopenClosedDay: false, // STRICTLY FORBIDDEN (خاص بالمالك)
@@ -3910,7 +3910,7 @@ export const TAREK_OPERATIONAL_PERMISSIONS: UserPermissions = {
   canViewExpenses: false, // STRICTLY FORBIDDEN (رواتب الإدارة والمصاريف الحساسة)
   canViewReports: true, // Empowered to access Sales & Invoices Ledger (with Cost/Profit columns hidden)
   canManageSettings: false, // STRICTLY FORBIDDEN (إعدادات النظام الحساسة)
-  canAccessOperationsSystem: true, // Empowered to follow daily sales target & commission tiers
+  canAccessOperationsSystem: false, // Owner-only console can include budgets, commissions and profit controls.
 };
 
 // Standard Cashier Preset (فقط البيع والكاشير والزبائن)

@@ -62,7 +62,7 @@ export function canAccessView(user: AppUser | null, view: View | string): boolea
       return true;
 
     case View.DASHBOARD:
-      return true;
+      return p.canViewExecutiveDashboard === true;
 
     case View.REPORTS:
       // Allow access to Sales & Invoices Ledger (profit/cost columns remain role-protected inside)
@@ -79,7 +79,7 @@ export function canAccessView(user: AppUser | null, view: View | string): boolea
       return p.canViewStock || p.canRecordShortage || p.canStockCheck || p.canCreatePurchaseRequest;
 
     case View.FORMULATION_ENGINE:
-      return p.canEditProductCost || user.role === 'STORE_MANAGER';
+      return p.canEditProductCost === true && p.canViewCosts === true;
 
     case View.FINANCIAL_VAULTS:
       return p.canViewVaults && p.canApproveWithdrawal;
@@ -88,7 +88,7 @@ export function canAccessView(user: AppUser | null, view: View | string): boolea
       return p.canViewExpenses === true || p.canEditBudget === true;
 
     case View.OPERATIONS_SYSTEM:
-      return true;
+      return p.canAccessOperationsSystem === true && p.canEditBudget === true;
 
     case View.SETTINGS:
       return p.canManageSettings === true;

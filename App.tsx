@@ -65,6 +65,7 @@ import {
 } from './types';
 import {
   persistDataDurable,
+  replaceDataDurable,
   loadDataSync,
   hydrateFromIndexedDBIfNeeded,
   mergeCollectionRecords,
@@ -145,8 +146,16 @@ import {
   onFirebaseAuthStateChanged,
   getCurrentFirebaseUser,
   getGoogleSignInErrorMessage,
-  isTransientFirebaseError
+  isTransientFirebaseError,
+  sanitizeOperationalRecord,
+  toOperationalSettings
 } from './services/firebase';
+import {
+  setOfflineQueueIdentity,
+  enqueueOfflineAction,
+  getOfflineQueue,
+  removeOfflineItem,
+} from './services/offlineSyncService';
 import { canAccessView } from './services/authService';
 import { Lock, WifiOff } from 'lucide-react';
 
@@ -1305,6 +1314,43 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Employee sales use a durable outbox because callable Functions cannot queue offline like Firestore writes.
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'OWNER') return;
+    let flushing = false;
+    let disposed = false;
+    const flushPendingEmployeeSales = async () => {
+      if (flushing || disposed || typeof navigator === 'undefined' || !navigator.onLine) return;
+      const pendingSales = getOfflineQueue().filter((item) => item.entityType === 'sale');
+      if (pendingSales.length === 0) return;
+      flushing = true;
+      try {
+        for (const item of pendingSales) {
+          if (disposed) break;
+          try {
+            await addSaleCloud(item.payload as Sale);
+            removeOfflineItem(item.id);
+            setIsCloudConnected(true);
+          } catch (error) {
+            console.warn('Employee sale remains in the offline outbox:', error);
+            setIsCloudConnected(false);
+            break;
+          }
+        }
+      } finally {
+        flushing = false;
+      }
+    };
+    window.addEventListener('online', flushPendingEmployeeSales);
+    window.addEventListener('lamsa-offline-queue-changed', flushPendingEmployeeSales);
+    void flushPendingEmployeeSales();
+    return () => {
+      disposed = true;
+      window.removeEventListener('online', flushPendingEmployeeSales);
+      window.removeEventListener('lamsa-offline-queue-changed', flushPendingEmployeeSales);
+    };
+  }, [currentUser]);
+
   // Sync state changes to durable storage (localStorage + IndexedDB)
   useEffect(() => {
     persistDataDurable('lamsa_products', products);
@@ -1657,21 +1703,90 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLoginSuccess = (user: AppUser) => {
+  const handleLoginSuccess = async (user: AppUser) => {
     const cleanUser: AppUser = sanitizeUserAccount(user);
-    setCurrentUser(cleanUser);
-    setSavedSessionUser(cleanUser);
+    setOfflineQueueIdentity(cleanUser.authEmail || null, cleanUser.role);
     setAuthRestoreError(null);
-    setCloudSyncError(false);
-    setIsScreenLocked(false);
     if (cleanUser.role !== 'OWNER') {
+      const safeRows = <T,>(collectionName: string, rows: T[]): T[] =>
+        rows.map((row) => sanitizeOperationalRecord(collectionName, row));
+      const safeProducts = safeRows('products', products);
+      const safeSales = safeRows('sales', sales);
+      const safeSettings = toOperationalSettings(settings, DEFAULT_SETTINGS);
+      const safeBottleSizes = bottleSizes.map((size) => ({
+        ...sanitizeOperationalRecord('bottleSizes', size),
+        bottleCost: 0,
+        alcoholCost: 0,
+        suggestedMargin: 0,
+        officialCost: 0,
+      } as BottleSize));
+      const safeAttendance = safeRows('staff_attendance', attendanceRecords);
+      const safeClosures = safeRows('daily_closures', dailyClosures);
+      const safePurchaseRequests = safeRows('purchase_requests', purchaseRequests);
+      const safeCustomerRequests = safeRows('customer_requests', customerRequests);
+      const safeStockChecks = safeRows('stock_checks', stockChecks);
+      const safeCustomers = safeRows('customers', customCustomers);
+      const safeMixes = safeRows('saved_mixes', savedMixes);
+      const safeFragranceDatabase = safeRows<FragranceDatabaseEntry>('fragrance_database', fragranceDatabase);
+      const coreUsers = ensureCoreUsersList(DEFAULT_USERS);
+
+      // Replace both localStorage and IndexedDB values before mounting any role-specific subscriptions.
+      setProducts(safeProducts);
+      setSales(safeSales);
+      setSettings(safeSettings);
+      setBottleSizes(safeBottleSizes);
       setExpenses([]);
       setVaults([]);
       setWithdrawals([]);
+      setAttendanceRecords(safeAttendance);
+      setBatches([]);
       setAuditLogs([]);
-      setUsers(ensureCoreUsersList(DEFAULT_USERS));
+      setUsers(coreUsers);
+      setDailyClosures(safeClosures);
+      setPurchaseRequests(safePurchaseRequests);
+      setCustomerRequests(safeCustomerRequests);
+      setStockChecks(safeStockChecks);
+      setCustomCustomers(safeCustomers);
+      setSavedMixes(safeMixes);
+      setFragranceDatabase(safeFragranceDatabase);
+      setStrategicOrders([]);
       setCurrentView(View.POS);
+      saveLocalFragranceDatabase(safeFragranceDatabase);
+      saveLocalStrategicOrders([]);
+
+      try {
+        await Promise.all([
+          replaceDataDurable('lamsa_products', safeProducts),
+          replaceDataDurable('lamsa_sales', safeSales),
+          replaceDataDurable('lamsa_settings_v2', safeSettings),
+          replaceDataDurable('lamsa_bottle_sizes_v2', safeBottleSizes),
+          replaceDataDurable('lamsa_expenses_v2', []),
+          replaceDataDurable('lamsa_vaults_v1', []),
+          replaceDataDurable('lamsa_withdrawals_v1', []),
+          replaceDataDurable('lamsa_attendance_v1', safeAttendance),
+          replaceDataDurable('lamsa_batches_v1', []),
+          replaceDataDurable('lamsa_audit_logs_v1', []),
+          replaceDataDurable('lamsa_users_v1', coreUsers),
+          replaceDataDurable('lamsa_closures_v1', safeClosures),
+          replaceDataDurable('lamsa_purchase_requests_v1', safePurchaseRequests),
+          replaceDataDurable('lamsa_customer_requests_v1', safeCustomerRequests),
+          replaceDataDurable('lamsa_stock_checks_v1', safeStockChecks),
+          replaceDataDurable('lamsa_custom_customers_v1', safeCustomers),
+          replaceDataDurable('lamsa_saved_mixes_v1', safeMixes),
+          replaceDataDurable('lamsa_strategic_orders_v1', []),
+          replaceDataDurable('lamsa_fragrance_db_v2', safeFragranceDatabase),
+        ]);
+      } catch (error) {
+        console.error('Failed to isolate local data for the employee role:', error);
+        setIsScreenLocked(true);
+        setAuthRestoreError('تعذّر تنظيف ذاكرة هذا الجهاز بأمان؛ أبقينا التطبيق مقفلاً. أعد المحاولة أو افتحه من جهاز آخر.');
+        return;
+      }
     }
+    setCurrentUser(cleanUser);
+    setSavedSessionUser(cleanUser);
+    setCloudSyncError(false);
+    setIsScreenLocked(false);
     pushTopNotification(
       'auth',
       `مرحباً بك، ${cleanUser.displayName.replace(/\(.*?\)/g, '').trim()}`,
@@ -1969,7 +2084,7 @@ const App: React.FC = () => {
     );
 
     // Update Restock Vault balance in real-time (capital recovery for raw materials)
-    if (sale.totalCost > 0) {
+    if (currentUser?.role === 'OWNER' && sale.totalCost > 0) {
       setVaults(prevVaults => {
         const next = prevVaults.map(v => {
           if (v.id === 'restock') {
@@ -1988,11 +2103,16 @@ const App: React.FC = () => {
       });
     }
 
-    // Push to Firestore - immediately reflects on all other devices in real-time
-    try {
-      await addSaleCloud(sale, updatedProductsList);
-    } catch (err) {
-      console.error("Error saving sale to Firestore:", err);
+    // Owner writes use Firestore's offline persistence; employee sales use a role-isolated durable outbox.
+    if (currentUser?.role === 'OWNER') {
+      try {
+        await addSaleCloud(sale, updatedProductsList);
+      } catch (err) {
+        console.error('Error saving owner sale to Firestore:', err);
+      }
+    } else {
+      enqueueOfflineAction('sale', sale);
+      window.dispatchEvent(new Event('lamsa-offline-queue-changed'));
     }
   };
 

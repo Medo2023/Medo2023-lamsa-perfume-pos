@@ -102,7 +102,6 @@ import {
   ArrowLeftRight,
   CheckCheck
 } from 'lucide-react';
-import { enqueueOfflineAction } from '../services/offlineSyncService';
 import ReceiptModal from './ReceiptModal';
 
 interface POSProps {
@@ -2011,14 +2010,6 @@ const POS: React.FC<POSProps> = ({
         reason: `استثناء مصرح: ${ownerExceptionReason} - ${ownerExceptionNotes}`,
         approvedBy: 'د. محمد (المالك)'
       });
-    }
-
-    if (!navigator.onLine) {
-      try {
-        enqueueOfflineAction('sale', newSale);
-      } catch (e) {
-        console.warn('Could not enqueue offline sale:', e);
-      }
     }
 
     localStorage.removeItem('lamsa_pos_active_cart_v2');

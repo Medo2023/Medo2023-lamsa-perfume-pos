@@ -5,10 +5,26 @@ import {
 } from '../types';
 
 const OFFLINE_QUEUE_KEY = 'lamsa_offline_queue_v1';
+let activeQueueStorageKey = OFFLINE_QUEUE_KEY;
+
+function stableUserQueueSuffix(email: string): string {
+  let hash = 2166136261;
+  for (const char of email.trim().toLowerCase()) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function setOfflineQueueIdentity(email: string | null, role: string | null): void {
+  activeQueueStorageKey = role === 'OWNER'
+    ? OFFLINE_QUEUE_KEY
+    : `${OFFLINE_QUEUE_KEY}_${email ? stableUserQueueSuffix(email) : 'non_owner'}`;
+}
 
 export function getOfflineQueue(): OfflineQueueItem[] {
   try {
-    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    const raw = localStorage.getItem(activeQueueStorageKey);
     if (raw) return JSON.parse(raw);
   } catch (e) {
     console.error('Error reading offline queue:', e);
@@ -18,7 +34,7 @@ export function getOfflineQueue(): OfflineQueueItem[] {
 
 export function saveOfflineQueue(queue: OfflineQueueItem[]): void {
   try {
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    localStorage.setItem(activeQueueStorageKey, JSON.stringify(queue));
   } catch (e) {
     console.error('Error saving offline queue:', e);
   }

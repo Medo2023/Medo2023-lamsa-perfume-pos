@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedInWithGoogle() {
       return request.auth != null
-        && request.auth.token.email != null
+        && request.auth.token.email is string
         && request.auth.token.email_verified == true
         && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
@@ -20,139 +20,264 @@ service cloud.firestore {
       return get(memberProfilePath()).data;
     }
 
-    function activeMember() {
-      return hasProfile() && memberProfile().isActive == true;
+    function isOwner() {
+      return hasProfile() && memberProfile().isActive == true && memberProfile().role == 'OWNER';
     }
 
-    function isOwner() {
-      return activeMember() && memberProfile().role == 'OWNER';
+    function confidentialMigrationComplete() {
+      let marker = /databases/$(database)/documents/owner_private/__confidential_migration_v1;
+      return exists(marker)
+        && get(marker).data.status == 'complete'
+        && get(marker).data.version == 1;
+    }
+
+    function activeMember() {
+      return hasProfile()
+        && memberProfile().isActive == true
+        && (memberProfile().role == 'OWNER' || confidentialMigrationComplete());
+    }
+
+    function restrictedNonOwnerPermission(permission) {
+      return permission in [
+        'canEditProductCost', 'canViewCosts', 'canViewProfits', 'canViewCostAndProfit',
+        'canViewProfitAndCosts', 'canViewExecutiveDashboard', 'canViewVaults',
+        'canRequestWithdrawal', 'canApproveWithdrawal', 'canInjectCapital',
+        'canTransferBetweenVaults', 'canWithdrawOwnerProfit', 'canEditBudget',
+        'canEditSalaries', 'canEditCommissions', 'canViewExpenses', 'canManageSettings',
+        'canManageUsers', 'canViewAuditLog', 'canViewAuditLogs', 'canAccessOperationsSystem',
+        'canEditSettingsAndBudgets', 'canExportData', 'canDeleteInvoices'
+      ];
     }
 
     function hasPermission(permission) {
       return isOwner()
-        || (activeMember() && memberProfile().permissions[permission] == true);
+        || (activeMember()
+          && !restrictedNonOwnerPermission(permission)
+          && memberProfile().permissions[permission] == true);
+    }
+
+    function safeAnalysis(data) {
+      return !('analysis' in data)
+        || (data.analysis is map
+          && data.analysis.keys().hasOnly([
+            'topNotes', 'heartNotes', 'baseNotes', 'mainAccords', 'bestSeason',
+            'bestTime', 'longevity', 'sillage', 'salesPitch', 'layeringSuggestion'
+          ]));
+    }
+
+    function safeProduct(data) {
+      return data.keys().hasOnly([
+        'id', 'name', 'brand', 'origin', 'gender', 'season', 'timeOfDay', 'type',
+        'stock_grams', 'min_threshold_grams', 'customSellingPriceOverride', 'analysis',
+        'strategicThresholdGrams', 'occasions', 'fragranceProfileId', 'isSavedMixRecipe',
+        'updatedAt'
+      ]) && safeAnalysis(data);
     }
 
     function stockOnlyUpdate() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock_grams']);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock_grams', 'updatedAt']);
+    }
+
+    function safeBottleSize(data) {
+      return data.keys().hasOnly([
+        'id', 'name', 'sizeMl', 'essenceGrams', 'normalPrice', 'coloredNormalPrice',
+        'specialPrice', 'coloredSpecialPrice', 'isRollOn', 'isActive'
+      ]);
+    }
+
+    function safeAttendance(data) {
+      return data.keys().hasOnly([
+        'id', 'employeeName', 'date', 'checkInTime', 'checkOutTime', 'openedStore',
+        'status', 'salesCount', 'todaysSalesTotal'
+      ]);
+    }
+
+    function safeClosure(data) {
+      return data.keys().hasOnly([
+        'id', 'date', 'status', 'openedAt', 'openedBy', 'closedAt', 'closedBy',
+        'electronicSalesTotal', 'cashSalesTotal', 'totalSalesRevenue', 'dataClassification',
+        'isTestData', 'testClassificationNote'
+      ]);
+    }
+
+    function safePurchaseRequest(data) {
+      return data.keys().hasOnly([
+        'id', 'date', 'requestedBy', 'productName', 'brand', 'requestedGrams',
+        'priority', 'status', 'approvedBy', 'approvedAt'
+      ]);
+    }
+
+    function safeCustomerRequest(data) {
+      return data.keys().hasOnly([
+        'id', 'date', 'recordedBy', 'customerName', 'customerPhone', 'requestedPerfume',
+        'perfumeName', 'brand', 'preferredSizeMl', 'requestedBottleSize', 'requestCount',
+        'lastRequestedAt', 'status', 'notes'
+      ]);
+    }
+
+    function safeSale(data) {
+      return data.keys().hasOnly([
+        'id','items','totalPrice','date','customerName','customerPhone','paymentMethod',
+        'transactionType','discount','loyaltyPointsRedeemed','loyaltyDiscountAmount',
+        'loyaltyPointsEarned','customerLoyaltyBalanceAfter','packagingOptionId',
+        'packagingRevenueEgp','isBasicBagReplacedByLuxury','notes','employeeName',
+        'source','timestamp','transactionId','deviceTimestamp','serverTimestamp',
+        'isOfflineCreated','isReversed','originalSaleId','reversalReason','reversedBy',
+        'reversedAt','dataClassification','isTestData','testClassificationNote'
+      ]) && data.keys().hasAll(['id','items','totalPrice','date','employeeName']);
+    }
+
+    function safeStockCheck(data) {
+      return data.keys().hasOnly([
+        'id', 'date', 'performedBy', 'productId', 'productName', 'systemGrams',
+        'actualGrams', 'differenceGrams', 'justification', 'status'
+      ]);
+    }
+
+    function safeSavedMix(data) {
+      return data.keys().hasOnly([
+        'id', 'name', 'bottleSizeMl', 'sellingPrice', 'createdAt', 'updatedAt',
+        'createdBy', 'isOwnerApproved', 'approvedBy', 'customerRating', 'testResult',
+        'longevityNotes', 'sillageNotes', 'balanceNotes', 'timesSold', 'repurchaseRatePercent'
+      ]);
     }
 
     match /authorized_users/{email} {
-      allow get: if signedInWithGoogle() && request.auth.token.email == email;
-      allow list: if hasPermission('canManageUsers');
-      allow create, update, delete: if hasPermission('canManageUsers');
+      allow get: if signedInWithGoogle() && (request.auth.token.email == email || isOwner());
+      allow list: if isOwner();
+      allow create, update, delete: if isOwner();
+    }
+
+    match /owner_private/{recordId} {
+      allow read, write: if isOwner();
     }
 
     match /app_users/{userId} {
-      allow read, write: if hasPermission('canManageUsers');
+      allow read, write: if isOwner();
     }
 
     match /sales/{saleId} {
       allow read: if activeMember();
-      allow create: if hasPermission('canRecordSale');
-      allow update: if hasPermission('canRecordSale') || hasPermission('canCancelSale');
-      allow delete: if hasPermission('canCancelSale');
+      // Employee sales keep operational invoice fields only; private costs stay owner-only.
+      allow create: if isOwner() || (hasPermission('canRecordSale') && safeSale(request.resource.data));
+      allow update: if isOwner()
+        || (hasPermission('canCancelSale')
+          && resource.data.isReversed != true
+          && request.resource.data.isReversed == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isReversed', 'reversalReason', 'reversedBy', 'reversedAt'
+          ]));
+      allow delete: if isOwner();
     }
 
     match /products/{productId} {
       allow read: if activeMember();
-      allow create, delete: if hasPermission('canEditProductCost') || hasPermission('canEditProductPrice');
-      allow update: if hasPermission('canEditProductCost')
-        || hasPermission('canEditProductPrice')
+      allow create: if isOwner() || (hasPermission('canEditProductPrice') && safeProduct(request.resource.data));
+      allow update: if isOwner()
+        || (hasPermission('canEditProductPrice') && safeProduct(request.resource.data))
         || ((hasPermission('canRecordSale') || hasPermission('canRecordShortage') || hasPermission('canStockCheck'))
           && stockOnlyUpdate());
+      allow delete: if isOwner() || hasPermission('canEditProductPrice');
     }
 
     match /expenses/{expenseId} {
-      allow read: if hasPermission('canViewExpenses') || hasPermission('canEditBudget');
-      allow create, update, delete: if hasPermission('canEditBudget');
+      allow read, write: if isOwner();
     }
 
     match /settings/{settingId} {
       allow read: if activeMember();
-      allow write: if hasPermission('canManageSettings');
+      allow write: if isOwner();
     }
 
     match /bottleSizes/{bottleId} {
       allow read: if activeMember();
-      allow write: if hasPermission('canEditProductCost') || hasPermission('canEditProductPrice');
+      allow write: if isOwner()
+        || (hasPermission('canEditProductPrice') && safeBottleSize(request.resource.data));
     }
 
     match /vaults/{vaultId} {
-      allow read: if hasPermission('canViewVaults');
-      allow write: if hasPermission('canApproveWithdrawal')
-        || hasPermission('canTransferBetweenVaults')
-        || hasPermission('canInjectCapital')
-        || hasPermission('canEditBudget');
+      allow read, write: if isOwner();
     }
 
     match /withdrawals/{withdrawalId} {
-      allow read: if hasPermission('canViewVaults')
-        || hasPermission('canApproveWithdrawal')
-        || hasPermission('canRequestWithdrawal');
-      allow create: if hasPermission('canRequestWithdrawal') || hasPermission('canApproveWithdrawal');
-      allow update: if hasPermission('canApproveWithdrawal');
-      allow delete: if isOwner();
+      allow read, write: if isOwner();
     }
 
     match /staff_attendance/{attendanceId} {
       allow read: if activeMember();
-      allow create, update: if hasPermission('canLogFieldActivity')
-        || hasPermission('canOpenDay')
-        || hasPermission('canCloseDay');
+      allow create, update: if isOwner()
+        || ((hasPermission('canLogFieldActivity') || hasPermission('canOpenDay') || hasPermission('canCloseDay'))
+          && safeAttendance(request.resource.data));
       allow delete: if isOwner();
     }
 
     match /production_batches/{batchId} {
-      allow read: if activeMember();
-      allow create, update: if hasPermission('canEditProductCost') || hasPermission('canViewStock');
-      allow delete: if hasPermission('canEditProductCost');
+      allow read, write: if isOwner();
     }
 
     match /audit_logs/{logId} {
-      allow read: if hasPermission('canViewAuditLog');
+      allow read: if isOwner();
       allow create: if activeMember();
       allow update, delete: if isOwner();
     }
 
     match /daily_closures/{closureId} {
       allow read: if activeMember();
-      allow create, update: if hasPermission('canCloseDay') || hasPermission('canOpenDay');
+      allow create, update: if isOwner()
+        || ((hasPermission('canCloseDay') || hasPermission('canOpenDay')) && safeClosure(request.resource.data));
       allow delete: if isOwner();
     }
 
     match /purchase_requests/{requestId} {
-      allow read, write: if hasPermission('canCreatePurchaseRequest');
+      allow read: if hasPermission('canCreatePurchaseRequest');
+      allow create, update: if hasPermission('canCreatePurchaseRequest')
+        && safePurchaseRequest(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /customer_requests/{requestId} {
-      allow read, write: if hasPermission('canManageCustomers') || hasPermission('canRecordSale');
+      allow read: if hasPermission('canManageCustomers') || hasPermission('canRecordSale');
+      allow create, update: if (hasPermission('canManageCustomers') || hasPermission('canRecordSale'))
+        && safeCustomerRequest(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /stock_checks/{checkId} {
-      allow read, write: if hasPermission('canStockCheck');
+      allow read: if hasPermission('canStockCheck');
+      allow create, update: if hasPermission('canStockCheck') && safeStockCheck(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /replenishment_orders/{orderId} {
-      allow read, write: if hasPermission('canCreatePurchaseRequest');
+      allow read, write: if isOwner();
     }
 
     match /fragrance_database/{profileId} {
       allow read: if activeMember();
-      allow write: if hasPermission('canEditProductCost') || hasPermission('canManageSettings');
+      allow write: if isOwner();
     }
 
     match /customers/{customerId} {
-      allow read, write: if hasPermission('canManageCustomers');
+      allow read: if hasPermission('canManageCustomers');
+      allow create, update: if hasPermission('canManageCustomers')
+        && request.resource.data.keys().hasOnly([
+          'id', 'name', 'phone', 'notes', 'favoriteStyle', 'preferredBottleSizeMl',
+          'concentrationPreference', 'packagingPreference', 'preferredChannel',
+          'specialOccasionDate', 'nextFollowUpDate', 'followUpStatus', 'bonusPoints',
+          'redeemedPoints', 'loyaltyLogs', 'followUpLogs', 'customOffersSent', 'createdAt', 'updatedAt'
+        ]);
+      allow delete: if isOwner();
     }
 
     match /saved_mixes/{mixId} {
       allow read: if activeMember();
-      allow write: if hasPermission('canRecordSale') || hasPermission('canEditProductCost');
+      allow create, update: if (hasPermission('canRecordSale') || isOwner())
+        && safeSavedMix(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /test/{docId} {
-      allow read: if activeMember();
+      allow read: if isOwner();
       allow write: if isOwner();
     }
 

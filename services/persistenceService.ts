@@ -151,6 +151,41 @@ export function persistDataDurable<T>(storageKey: string, data: T): void {
   pendingPersistTimers.set(storageKey, timer);
 }
 
+/** Synchronously replace a persisted dataset before changing the signed-in user's role. */
+export async function replaceDataDurable<T>(storageKey: string, data: T): Promise<void> {
+  const existing = pendingPersistTimers.get(storageKey);
+  if (existing) clearTimeout(existing);
+  pendingPersistTimers.delete(storageKey);
+  pendingPersistPayloads.delete(storageKey);
+  const serialized = JSON.stringify(data);
+  try {
+    localStorage.setItem(storageKey, serialized);
+    markLocalWriteTimestamp(storageKey);
+  } catch (error) {
+    console.error(`Error replacing ${storageKey} in localStorage:`, error);
+    throw error;
+  }
+
+  const db = await openIdb();
+  if (!db) throw new Error(`IndexedDB is unavailable while replacing ${storageKey}.`);
+  await new Promise<void>((resolve, reject) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(data, storageKey);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error(`IndexedDB write failed for ${storageKey}.`));
+      tx.onabort = () => reject(tx.error || new Error(`IndexedDB write aborted for ${storageKey}.`));
+    } catch (error) {
+      reject(error);
+    }
+  });
+
+  const persisted = await idbGet<T>(storageKey);
+  if (JSON.stringify(persisted) !== serialized) {
+    throw new Error(`IndexedDB verification failed for ${storageKey}.`);
+  }
+}
+
 /**
  * Reads data synchronously from localStorage with fallback.
  */
