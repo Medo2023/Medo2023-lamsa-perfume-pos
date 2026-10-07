@@ -34,7 +34,8 @@ service cloud.firestore {
     function activeMember() {
       return hasProfile()
         && memberProfile().isActive == true
-        && (memberProfile().role == 'OWNER' || confidentialMigrationComplete());
+        && (memberProfile().role == 'OWNER'
+          || (memberProfile().migrationReady == true && confidentialMigrationComplete()));
     }
 
     function restrictedNonOwnerPermission(permission) {

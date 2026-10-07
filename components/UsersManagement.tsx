@@ -26,13 +26,26 @@ import {
   CheckCircle2,
   Sliders
 } from 'lucide-react';
+import type { ConfidentialMigrationResult, ConfidentialMigrationStatus } from '../services/firebase';
 
 interface UsersManagementProps {
   users: AppUser[];
   currentUser: AppUser | null;
   onSaveUser: (user: AppUser) => Promise<void> | void;
   onAddAuditLog: (log: AuditLogRecord) => void;
+  migrationStatus: ConfidentialMigrationStatus | null;
+  onResumeMigration: () => Promise<ConfidentialMigrationResult>;
 }
+
+const OWNER_ONLY_PERMISSION_KEYS = new Set<keyof UserPermissions>([
+  'canEditProductCost', 'canViewCosts', 'canViewProfits', 'canViewCostAndProfit',
+  'canViewProfitAndCosts', 'canViewExecutiveDashboard', 'canViewVaults',
+  'canRequestWithdrawal', 'canApproveWithdrawal', 'canInjectCapital',
+  'canTransferBetweenVaults', 'canWithdrawOwnerProfit', 'canEditBudget',
+  'canEditSalaries', 'canEditCommissions', 'canViewExpenses', 'canManageSettings',
+  'canManageUsers', 'canViewAuditLog', 'canViewAuditLogs', 'canAccessOperationsSystem',
+  'canEditSettingsAndBudgets', 'canExportData', 'canDeleteInvoices',
+]);
 
 const PERMISSION_LABELS: Partial<Record<keyof UserPermissions, { label: string; group: string }>> = {
   // Sales & POS
@@ -85,11 +98,16 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
   currentUser,
   onSaveUser,
   onAddAuditLog,
+  migrationStatus,
+  onResumeMigration,
 }) => {
   const isOwner = currentUser?.role === 'OWNER';
+  const isMigrationComplete = migrationStatus?.status === 'complete' && migrationStatus.version === 1;
 
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [isResumingMigration, setIsResumingMigration] = useState(false);
+  const [migrationActionError, setMigrationActionError] = useState<string | null>(null);
 
   // Form State
   const [formDisplayName, setFormDisplayName] = useState('');
@@ -125,6 +143,7 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
 
   // Toggle Single Permission
   const togglePermission = (key: keyof UserPermissions) => {
+    if (formRole !== 'OWNER' && OWNER_ONLY_PERMISSION_KEYS.has(key)) return;
     setFormPermissions(prev => ({
       ...prev,
       [key]: !prev[key]
@@ -162,6 +181,14 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
       alert('هذا البريد مرتبط بالفعل بحساب موظف آخر.');
       return;
     }
+    if (formRole !== 'OWNER' && !isMigrationComplete) {
+      alert('لا يمكن حفظ أو تفعيل حساب موظف محدود قبل اكتمال عزل البيانات الخاصة بالإصدار 1.');
+      return;
+    }
+
+    const safePermissions = formRole === 'OWNER'
+      ? { ...OWNER_FULL_PERMISSIONS }
+      : { ...formPermissions, ...Object.fromEntries([...OWNER_ONLY_PERMISSION_KEYS].map(key => [key, false])) } as UserPermissions;
 
     try {
       if (isCreatingNew) {
@@ -175,7 +202,7 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
           requiresPasswordChange: false,
           isActive: true,
           createdAt: new Date().toISOString(),
-          permissions: formPermissions,
+          permissions: safePermissions,
         };
 
         await onSaveUser(newUser);
@@ -205,7 +232,7 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
           role: formRole,
           passwordHash: '',
           requiresPasswordChange: false,
-          permissions: formPermissions,
+          permissions: safePermissions,
         };
 
         await onSaveUser(updated);
@@ -234,9 +261,13 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
   };
 
   // Toggle Active / Freeze Account
-  const handleToggleFreeze = (user: AppUser) => {
+  const handleToggleFreeze = async (user: AppUser) => {
     if (user.role === 'OWNER') {
       alert('لا يمكن إيقاف حساب المالك الأساسي.');
+      return;
+    }
+    if (!user.isActive && !isMigrationComplete) {
+      setStatusMessage('لا يمكن تفعيل الموظف قبل اكتمال الترحيل والتحقق من الإصدار 1.');
       return;
     }
 
@@ -245,7 +276,13 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
       isActive: !user.isActive
     };
 
-    onSaveUser(updated);
+    try {
+      await onSaveUser(updated);
+      setStatusMessage(updated.isActive ? `تم تفعيل ${updated.displayName}.` : `تم إيقاف ${updated.displayName}.`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'تعذّر تحديث حالة الموظف.');
+      return;
+    }
 
     onAddAuditLog({
       id: `audit-user-freeze-${Date.now()}`,
@@ -260,6 +297,24 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
       reason: updated.isActive ? 'إعادة تفعيل حساب الموظف' : 'إيقاف حساب الموظف مؤقتاً',
       category: 'مستخدمين_وأمان'
     });
+  };
+
+  const handleResumeMigration = async () => {
+    if (!isOwner || isMigrationComplete || isResumingMigration) return;
+    const isLegacyRunning = migrationStatus?.status === 'running' && !migrationStatus.leaseId;
+    if (isLegacyRunning && !window.confirm('الترحيل الحالي بدأ بنسخة قديمة لا تملك قفلاً لمنع التشغيل المتوازي. أغلق التطبيق في جميع التبويبات والأجهزة الأخرى، ثم اختر موافق لاستئنافه بأمان.')) return;
+    setIsResumingMigration(true);
+    setMigrationActionError(null);
+    try {
+      const result = await onResumeMigration();
+      if (result.skippedReason) {
+        setMigrationActionError('يوجد ترحيل نشط بالفعل. اتركه يكمل ثم أعد فحص الحالة.');
+      }
+    } catch (error) {
+      setMigrationActionError(error instanceof Error ? error.message : 'تعذّر استئناف الترحيل.');
+    } finally {
+      setIsResumingMigration(false);
+    }
   };
 
   // Group permissions by category
@@ -319,17 +374,46 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
         </div>
       )}
 
+      <section className={`p-4 rounded-2xl border space-y-2 ${isMigrationComplete ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`} aria-live="polite">
+        <div className="flex items-center gap-2 text-sm font-black text-[#1D1D1F]">
+          {isMigrationComplete ? <CheckCircle2 size={17} className="text-emerald-700" /> : <Shield size={17} className="text-amber-700" />}
+          <span>حالة عزل بيانات المالك</span>
+        </div>
+        {isMigrationComplete ? (
+          <p className="text-xs text-emerald-900">اكتمل الإصدار 1. يمكنك الآن تفعيل الموظفين وتعديل صلاحياتهم؛ وتظل التكلفة والميزانية والأرباح محصورة بالمالك.</p>
+        ) : (
+          <>
+            <p className="text-xs text-amber-950">الحالة: {migrationStatus?.status === 'running' ? 'قيد الترحيل' : migrationStatus?.status === 'error' ? 'توقف بخطأ' : migrationStatus?.status === 'unavailable' ? 'تعذّر قراءة الحالة' : 'لم يكتمل'}{migrationStatus?.version ? ` — الإصدار ${migrationStatus.version}` : ''}</p>
+            {migrationStatus?.status === 'running' && migrationStatus.leaseId && (
+              <p className="text-[11px] text-amber-900">جارٍ العمل على {migrationStatus.currentCollection || 'البيانات'}؛ أُنجز {migrationStatus.migratedDocuments || 0} من {migrationStatus.totalDocuments || 0} سجل.</p>
+            )}
+            {migrationStatus?.status === 'running' && !migrationStatus.leaseId && (
+              <p className="text-[11px] text-amber-900">هذه علامة تشغيل قديمة بلا تقدّم موثوق. لن يُفعّل أي موظف حتى يكتمل الترحيل.</p>
+            )}
+            {migrationStatus?.status === 'error' && (
+              <p className="text-[11px] text-rose-800">تعذّر الترحيل ({migrationStatus.errorCode || 'خطأ غير محدد'}). يمكن الاستئناف مع الحفاظ على النسخ الخاصة المنقولة.</p>
+            )}
+            <p className="text-xs text-amber-950">لا يمكن تفعيل طارق أو أي حساب محدود قبل ظهور الحالة «مكتمل — الإصدار 1».</p>
+            {migrationActionError && <p role="alert" className="text-xs font-bold text-rose-700">{migrationActionError}</p>}
+            <button type="button" onClick={handleResumeMigration} disabled={isResumingMigration} className="px-3 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 disabled:opacity-60 text-white text-xs font-bold">
+              {isResumingMigration ? 'جارٍ الاستئناف…' : migrationStatus?.status === 'running' || migrationStatus?.status === 'error' ? 'استئناف الترحيل الآمن' : 'بدء الترحيل الآمن'}
+            </button>
+          </>
+        )}
+      </section>
+
       {/* Users List Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {users.map(u => {
           const isOwnerUser = u.role === 'OWNER';
           const isCurrent = currentUser?.id === u.id;
+          const effectiveActive = isOwnerUser || isMigrationComplete ? u.isActive : false;
 
           return (
             <div 
               key={u.id}
               className={`p-5 rounded-3xl border transition-all ${
-                u.isActive 
+                effectiveActive
                   ? 'bg-white border-black/[0.08] shadow-apple' 
                   : 'bg-black/[0.02] border-black/[0.04] opacity-75'
               }`}
@@ -343,9 +427,9 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                         أنت
                       </span>
                     )}
-                    {!u.isActive && (
+                    {!effectiveActive && (
                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold">
-                        موقوف
+                        {!isOwnerUser && !isMigrationComplete ? 'محجوب مؤقتاً' : 'موقوف'}
                       </span>
                     )}
                   </div>
@@ -371,8 +455,8 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                 </span>
                 <span>
                   الحالة:{' '}
-                  <strong className={u.isActive ? 'text-emerald-700' : 'text-rose-700'}>
-                    {u.isActive ? 'نشط ويعمل' : 'موقوف مؤقتاً'}
+                  <strong className={effectiveActive ? 'text-emerald-700' : 'text-rose-700'}>
+                    {!isOwnerUser && !isMigrationComplete ? 'محجوب حتى اكتمال العزل' : u.isActive ? 'نشط ويعمل' : 'موقوف مؤقتاً'}
                   </strong>
                 </span>
               </div>
@@ -397,9 +481,10 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                         ? 'bg-rose-50 hover:bg-rose-100 text-rose-700' 
                         : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
                     }`}
+                    disabled={!u.isActive && !isMigrationComplete}
                   >
                     {u.isActive ? <UserX size={14} /> : <CheckCircle2 size={14} />}
-                    <span>{u.isActive ? 'إيقاف الموظف' : 'تفعيل'}</span>
+                    <span>{u.isActive ? 'إيقاف الموظف' : isMigrationComplete ? 'تفعيل' : 'بانتظار العزل'}</span>
                   </button>
                 )}
               </div>
@@ -474,12 +559,13 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                     value={formRole}
                     onChange={(e) => handleRolePreset(e.target.value as UserRole)}
                     className="w-full h-9 px-2.5 rounded-xl bg-white border border-black/[0.08] outline-none text-right font-bold"
+                    disabled={!isCreatingNew && selectedUser?.role === 'OWNER'}
                   >
                     <option value="CASHIER">كاشير ومبيعات</option>
                     <option value="STORE_MANAGER">مسؤول تشغيل (مثل طارق)</option>
                     <option value="SALES_REP">بائع ومسوق ميداني</option>
                     <option value="INVENTORY_KEEPER">أمين مخزون وخامات</option>
-                    <option value="OWNER">مالك (صلاحية كاملة)</option>
+                    {!isCreatingNew && selectedUser?.role === 'OWNER' && <option value="OWNER">مالك (صلاحية كاملة)</option>}
                   </select>
                 </div>
 
@@ -517,13 +603,14 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {permKeys.map(permKey => {
-                          const isAllowed = formRole === 'OWNER' ? true : !!formPermissions[permKey];
+                          const isLocked = formRole !== 'OWNER' && OWNER_ONLY_PERMISSION_KEYS.has(permKey);
+                          const isAllowed = formRole === 'OWNER' ? true : !isLocked && !!formPermissions[permKey];
                           const info = PERMISSION_LABELS[permKey];
 
                           return (
                             <label
                               key={permKey}
-                              className={`px-2 py-1.5 rounded-xl border text-[11px] flex items-center justify-between cursor-pointer transition-colors ${
+                              className={`px-2 py-1.5 rounded-xl border text-[11px] flex items-center justify-between transition-colors ${isLocked ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'} ${
                                 isAllowed
                                   ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950 font-bold'
                                   : 'bg-white border-black/[0.06] text-[#86868B]'
@@ -533,10 +620,11 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                                 <input
                                   type="checkbox"
                                   checked={isAllowed}
-                                  disabled={formRole === 'OWNER'}
+                                  disabled={formRole === 'OWNER' || isLocked}
                                   onChange={() => togglePermission(permKey)}
                                   className="w-3.5 h-3.5 rounded text-[#0071E3] focus:ring-0 shrink-0"
                                 />
+                                {isLocked && <Lock size={11} className="shrink-0 text-amber-700" />}
                                 <span className="truncate">{info.label}</span>
                               </div>
                             </label>

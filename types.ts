@@ -4015,7 +4015,7 @@ export const DEFAULT_USERS: AppUser[] = [
     authEmail: '',
     passwordHash: '',
     requiresPasswordChange: false,
-    isActive: true,
+    isActive: false,
     createdAt: new Date().toISOString(),
     permissions: TAREK_OPERATIONAL_PERMISSIONS,
   },

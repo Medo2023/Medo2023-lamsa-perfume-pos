@@ -11,7 +11,7 @@ import {
   isLiveProductionSale,
   isTestOrExampleRecord
 } from '../types';
-import { canViewProfits, canViewCosts } from '../services/authService';
+import { canViewProfits, canViewCosts, hasPermission } from '../services/authService';
 import {
   TrendingUp,
   DollarSign,
@@ -103,6 +103,7 @@ const Reports: React.FC<ReportsProps> = ({
 
   const showProfitMetrics = (canViewProfits(currentUser ?? null) || currentUser?.role === 'OWNER') && !hideProfits;
   const showCostMetrics = (canViewCosts(currentUser ?? null) || currentUser?.role === 'OWNER') && !hideProfits;
+  const canExportReports = hasPermission(currentUser ?? null, 'canExportData');
 
   // Filter & Sort sales in real-time
   const filteredSales = useMemo(() => {
@@ -160,7 +161,7 @@ const Reports: React.FC<ReportsProps> = ({
     // Sort
     return [...list].sort((a, b) => {
       if (sortBy === 'highest_price') return (b.totalPrice || 0) - (a.totalPrice || 0);
-      if (sortBy === 'highest_profit') return (b.totalProfit || 0) - (a.totalProfit || 0);
+      if (sortBy === 'highest_profit' && canViewProfits(currentUser ?? null)) return (b.totalProfit || 0) - (a.totalProfit || 0);
       if (sortBy === 'highest_grams') {
         const gA = (a.items || []).reduce((s, i) => s + (i.essenceGrams || 0), 0);
         const gB = (b.items || []).reduce((s, i) => s + (i.essenceGrams || 0), 0);
@@ -168,7 +169,7 @@ const Reports: React.FC<ReportsProps> = ({
       }
       return new Date(b.date).getTime() - new Date(a.date).getTime();
     });
-  }, [sales, timeRange, customDate, paymentFilter, sortBy, searchTerm]);
+  }, [sales, timeRange, customDate, paymentFilter, sortBy, searchTerm, currentUser?.role]);
 
   // Financial aggregates (active non-reversed live production sales)
   const activeFilteredSales = useMemo(
@@ -338,28 +339,40 @@ const Reports: React.FC<ReportsProps> = ({
 
   // Export CSV
   const handleExportCSV = () => {
-    const headers = ['رقم الفاتورة,التاريخ,الأصناف,عدد العبوات,الزيت(جم),التكلفة,سعر البيع,الربح,العميل,الهاتف,طريقة الدفع,البائع'];
+    if (!canExportReports) return;
+    const includeCosts = canViewCosts(currentUser ?? null);
+    const includeProfits = canViewProfits(currentUser ?? null);
+    const headers = [
+      'رقم الفاتورة', 'التاريخ', 'الأصناف', 'عدد العبوات', 'الزيت(جم)',
+      ...(includeCosts ? ['التكلفة'] : []),
+      'سعر البيع',
+      ...(includeProfits ? ['الربح'] : []),
+      'العميل', 'الهاتف', 'طريقة الدفع', 'البائع',
+    ];
     const rows = filteredSales.map((s) => {
       const itemsSummary = (s.items || []).map(i => `${i.productName} (${i.bottleSize}مل×${i.quantity || 1})`).join(' + ');
       const bottlesCount = (s.items || []).reduce((acc, i) => acc + (i.quantity || 1), 0);
       const gramsCount = (s.items || []).reduce((acc, i) => acc + (i.essenceGrams || 0), 0);
-      return [
+      const values: Array<string | number> = [
         s.id,
         new Date(s.date).toLocaleString('ar-EG'),
         `"${itemsSummary}"`,
         bottlesCount,
         gramsCount,
-        s.totalCost,
-        s.totalPrice,
-        s.totalProfit,
+      ];
+      if (includeCosts) values.push(s.totalCost ?? '');
+      values.push(s.totalPrice ?? 0);
+      if (includeProfits) values.push(s.totalProfit ?? '');
+      values.push(
         `"${s.customerName || 'عميل نقدي'}"`,
         `"${s.customerPhone || ''}"`,
         `"${s.paymentMethod || 'نقدي'}"`,
         `"${s.employeeName || 'طارق'}"`
-      ].join(',');
+      );
+      return values.join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers, ...rows].join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -417,7 +430,7 @@ ${itemsLines}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {onDeleteSale && sales.some((s) => s.isReversed) && (
+          {onDeleteSale && hasPermission(currentUser ?? null, 'canDeleteInvoices') && sales.some((s) => s.isReversed) && (
             <button
               type="button"
               onClick={() => {
@@ -445,15 +458,17 @@ ${itemsLines}
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="apple-btn flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] text-xs font-bold text-[#1D1D1F] shadow-apple-xs hover:bg-black/[0.02] cursor-pointer"
-            title="تصدير سجل الفواتير لملف إكسل CSV"
-          >
-            <Download size={14} className="text-[#0071E3]" />
-            <span>تصدير إكسل (CSV)</span>
-          </button>
+          {canExportReports && (
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              className="apple-btn flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-black/[0.08] text-xs font-bold text-[#1D1D1F] shadow-apple-xs hover:bg-black/[0.02] cursor-pointer"
+              title="تصدير سجل الفواتير لملف إكسل CSV"
+            >
+              <Download size={14} className="text-[#0071E3]" />
+              <span>تصدير إكسل (CSV)</span>
+            </button>
+          )}
 
           {(canViewProfits(currentUser ?? null) || currentUser?.role === 'OWNER') && (
             <button
@@ -539,7 +554,7 @@ ${itemsLines}
             >
               <option value="newest">الأحدث أولاً</option>
               <option value="highest_price">الأعلى قيمة (المبلغ)</option>
-              <option value="highest_profit">الأعلى ربحاً</option>
+              {canViewProfits(currentUser ?? null) && <option value="highest_profit">الأعلى ربحاً</option>}
               <option value="highest_grams">الأكثر استهلاكاً للزيت</option>
             </select>
           </div>

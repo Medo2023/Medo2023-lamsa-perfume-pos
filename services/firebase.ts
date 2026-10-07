@@ -22,6 +22,7 @@ import {
   limit,
   getDocFromServer,
   updateDoc,
+  runTransaction,
   type Firestore
 } from 'firebase/firestore';
 import {
@@ -112,6 +113,33 @@ const rolePermissions = (role: UserRole): AppUser['permissions'] => {
   return CASHIER_STANDARD_PERMISSIONS;
 };
 
+const OWNER_ONLY_PERMISSION_OVERRIDES: Partial<AppUser['permissions']> = {
+  canEditProductCost: false,
+  canViewCosts: false,
+  canViewProfits: false,
+  canViewCostAndProfit: false,
+  canViewProfitAndCosts: false,
+  canViewExecutiveDashboard: false,
+  canViewVaults: false,
+  canRequestWithdrawal: false,
+  canApproveWithdrawal: false,
+  canInjectCapital: false,
+  canTransferBetweenVaults: false,
+  canWithdrawOwnerProfit: false,
+  canEditBudget: false,
+  canEditSalaries: false,
+  canEditCommissions: false,
+  canViewExpenses: false,
+  canManageSettings: false,
+  canManageUsers: false,
+  canViewAuditLog: false,
+  canViewAuditLogs: false,
+  canAccessOperationsSystem: false,
+  canEditSettingsAndBudgets: false,
+  canExportData: false,
+  canDeleteInvoices: false,
+};
+
 let activeAuthorizedRole: UserRole | null = null;
 const isOwnerSession = () => activeAuthorizedRole === 'OWNER';
 export const isCurrentSessionOwner = () => isOwnerSession();
@@ -156,45 +184,19 @@ export const loadAuthorizedAppUser = async (firebaseUser: User): Promise<AppUser
   }
 
   const role = profile.role as UserRole;
+  if (role !== 'OWNER' && profile.migrationReady !== true) {
+    throw new Error('هذا الحساب غير مفعّل بعد. يجب أن يكمل المالك عزل البيانات الخاصة ثم يفعّل الحساب من إدارة الصلاحيات.');
+  }
   activeAuthorizedRole = role;
   const permissions: AppUser['permissions'] = {
     ...rolePermissions(role),
     ...(profile.permissions || {}),
   };
-  if (role === 'STORE_MANAGER') {
-    Object.assign(permissions, {
-      canEditProductCost: false,
-      canViewCosts: false,
-      canViewProfits: false,
-      canViewCostAndProfit: false,
-      canViewProfitAndCosts: false,
-      canViewExecutiveDashboard: false,
-      canViewVaults: false,
-      canRequestWithdrawal: false,
-      canApproveWithdrawal: false,
-      canInjectCapital: false,
-      canTransferBetweenVaults: false,
-      canWithdrawOwnerProfit: false,
-      canEditBudget: false,
-      canEditSalaries: false,
-      canEditCommissions: false,
-      canViewExpenses: false,
-      canManageSettings: false,
-      canManageUsers: false,
-      canViewAuditLog: false,
-      canViewAuditLogs: false,
-      canAccessOperationsSystem: false,
-      canEditSettingsAndBudgets: false,
-      canExportData: false,
-    });
-  }
+  if (role !== 'OWNER') Object.assign(permissions, OWNER_ONLY_PERMISSION_OVERRIDES);
   if (role === 'OWNER' && (typeof navigator === 'undefined' || navigator.onLine)) {
-    try {
-      const migration = await migrateConfidentialDataToOwnerPrivate();
-      if (!migration.alreadyComplete) console.info(`Sensitive data migration completed (${migration.migratedDocuments} records).`);
-    } catch (error) {
-      console.error('Confidential data migration is not complete; do not activate limited-access employees yet.', error);
-    }
+    // Authentication must not wait for the potentially long data migration.
+    // Existing running migrations are observed instead of being duplicated.
+    void startOwnerConfidentialMigrationInBackground();
   }
   return {
     id: typeof profile.appUserId === 'string' ? profile.appUserId : `google-${firebaseUser.uid}`,
@@ -430,6 +432,78 @@ const CONFIDENTIAL_COLLECTIONS = [
   'customer_requests', 'saved_mixes', 'fragrance_database',
 ] as const;
 
+export interface ConfidentialMigrationStatus {
+  status?: string;
+  version?: number;
+  startedAt?: string;
+  attemptStartedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  migratedDocuments?: number;
+  totalDocuments?: number;
+  currentCollection?: string | null;
+  currentCollectionProcessed?: number;
+  currentCollectionTotal?: number;
+  errorCode?: string | null;
+  failedCollection?: string | null;
+  leaseId?: string | null;
+  leaseUntilMs?: number;
+  counts?: Record<string, number>;
+}
+
+export interface ConfidentialMigrationResult {
+  alreadyComplete: boolean;
+  migratedDocuments: number;
+  skippedReason?: 'running' | 'legacy-running';
+}
+
+const CONFIDENTIAL_MIGRATION_LEASE_MS = 5 * 60 * 1000;
+let localConfidentialMigrationTask: Promise<ConfidentialMigrationResult> | null = null;
+let ownerMigrationBackgroundTask: Promise<void> | null = null;
+
+const migrationMarkerRef = () => doc(db, PRIVATE_COLLECTION, PRIVATE_MIGRATION_MARKER);
+const migrationIsComplete = (marker?: ConfidentialMigrationStatus) =>
+  marker?.status === 'complete' && marker.version === 1;
+
+export function subscribeConfidentialMigrationStatus(
+  onUpdate: (status: ConfidentialMigrationStatus) => void,
+): () => void {
+  if (!isOwnerSession()) {
+    onUpdate({ status: 'unavailable' });
+    return () => {};
+  }
+  return onSnapshot(migrationMarkerRef(), (snapshot) => {
+    onUpdate(snapshot.exists()
+      ? snapshot.data() as ConfidentialMigrationStatus
+      : { status: 'missing', version: 1 });
+  }, (error) => {
+    console.warn('Unable to read confidential migration status.', error);
+    onUpdate({ status: 'unavailable' });
+  });
+}
+
+function startOwnerConfidentialMigrationInBackground(): void {
+  if (ownerMigrationBackgroundTask) return;
+  ownerMigrationBackgroundTask = (async () => {
+    try {
+      const markerSnapshot = await getDoc(migrationMarkerRef());
+      const marker = markerSnapshot.exists()
+        ? markerSnapshot.data() as ConfidentialMigrationStatus
+        : undefined;
+      if (migrationIsComplete(marker) || marker?.status === 'running' || marker?.status === 'error') return;
+
+      const result = await migrateConfidentialDataToOwnerPrivate();
+      if (!result.alreadyComplete && !result.skippedReason) {
+        console.info(`Sensitive data migration completed (${result.migratedDocuments} records).`);
+      }
+    } catch (error) {
+      console.error('Confidential data migration remains incomplete; limited-access users must stay inactive.', error);
+    }
+  })().finally(() => {
+    ownerMigrationBackgroundTask = null;
+  });
+}
+
 const privateRecordRef = (collectionName: string, id: string) =>
   doc(db, PRIVATE_COLLECTION, privateConfidentialDocId(collectionName, id));
 
@@ -593,47 +667,214 @@ export function toOperationalSettings(record: Partial<StoreSettings>, fallback: 
   } as StoreSettings;
 }
 
-export async function migrateConfidentialDataToOwnerPrivate(): Promise<{ alreadyComplete: boolean; migratedDocuments: number }> {
+async function runConfidentialDataMigration(forceResume: boolean): Promise<ConfidentialMigrationResult> {
   await ensureAuth();
   if (!isOwnerSession()) throw new Error('ترحيل البيانات الحساسة متاح لحساب المالك فقط.');
   if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('يلزم الاتصال بالإنترنت لإكمال ترحيل البيانات الآمن.');
 
-  const markerRef = doc(db, PRIVATE_COLLECTION, PRIVATE_MIGRATION_MARKER);
-  const markerSnap = await getDoc(markerRef);
-  if (markerSnap.exists() && markerSnap.data().status === 'complete' && markerSnap.data().version === 1) {
-    return { alreadyComplete: true, migratedDocuments: Number(markerSnap.data().migratedDocuments || 0) };
-  }
+  const markerRef = migrationMarkerRef();
+  const runId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const now = new Date().toISOString();
+  type ClaimResult = {
+    state: 'complete' | 'running' | 'legacy-running' | 'acquired';
+    migratedDocuments: number;
+  };
+  const claim = await runTransaction(db, async (transaction): Promise<ClaimResult> => {
+    const markerSnapshot = await transaction.get(markerRef);
+    const marker = markerSnapshot.exists()
+      ? markerSnapshot.data() as ConfidentialMigrationStatus
+      : undefined;
+    const migrated = Number(marker?.migratedDocuments || 0);
+    if (migrationIsComplete(marker)) return { state: 'complete', migratedDocuments: migrated };
 
-  const startBatch = firestoreWriteBatch(db);
-  startBatch.set(markerRef, { status: 'running', version: 1, startedAt: new Date().toISOString() }, { merge: true });
-  await startBatch.commit();
+    const leaseUntilMs = Number(marker?.leaseUntilMs || 0);
+    if (marker?.status === 'running' && leaseUntilMs > Date.now()) {
+      return { state: 'running', migratedDocuments: migrated };
+    }
+    if (marker?.status === 'running' && !marker.leaseId && !forceResume) {
+      return { state: 'legacy-running', migratedDocuments: migrated };
+    }
+
+    transaction.set(markerRef, {
+      status: 'running',
+      version: 1,
+      startedAt: marker?.startedAt || now,
+      attemptStartedAt: now,
+      updatedAt: now,
+      leaseId: runId,
+      leaseUntilMs: Date.now() + CONFIDENTIAL_MIGRATION_LEASE_MS,
+      migratedDocuments: 0,
+      totalDocuments: 0,
+      currentCollection: null,
+      currentCollectionProcessed: 0,
+      currentCollectionTotal: 0,
+      counts: {},
+      errorCode: null,
+      failedCollection: null,
+    }, { merge: true });
+    return { state: 'acquired', migratedDocuments: 0 };
+  });
+
+  if (claim.state === 'complete') return { alreadyComplete: true, migratedDocuments: claim.migratedDocuments };
+  if (claim.state === 'running' || claim.state === 'legacy-running') {
+    return {
+      alreadyComplete: false,
+      migratedDocuments: claim.migratedDocuments,
+      skippedReason: claim.state,
+    };
+  }
 
   let migratedDocuments = 0;
+  let totalDocuments = 0;
+  let currentCollection: string | null = null;
   const counts: Record<string, number> = {};
-  for (const collectionName of CONFIDENTIAL_COLLECTIONS) {
-    const snapshot = await getDocs(collection(db, collectionName));
-    counts[collectionName] = snapshot.size;
-    const docs = snapshot.docs;
-    for (let offset = 0; offset < docs.length; offset += 200) {
-      const batch = firestoreWriteBatch(db);
-      docs.slice(offset, offset + 200).forEach((docSnap) => {
-        stageConfidentialWrite(batch, collectionName, docSnap.id, docSnap.data() as ConfidentialRecord);
-        migratedDocuments += 1;
-      });
-      await batch.commit();
+  const renewLease = async (progress: Record<string, unknown>): Promise<boolean> => runTransaction(db, async (transaction) => {
+    const markerSnapshot = await transaction.get(markerRef);
+    const marker = markerSnapshot.exists() ? markerSnapshot.data() : undefined;
+    if (marker?.status === 'complete' && marker.version === 1) return false;
+    if (!markerSnapshot.exists() || marker?.leaseId !== runId) {
+      throw new Error('confidential-migration-lease-lost');
     }
-  }
-
-  const completeBatch = firestoreWriteBatch(db);
-  completeBatch.set(markerRef, {
-    status: 'complete',
-    version: 1,
-    completedAt: new Date().toISOString(),
-    migratedDocuments,
-    counts,
+    transaction.set(markerRef, {
+      ...progress,
+      updatedAt: new Date().toISOString(),
+      leaseUntilMs: Date.now() + CONFIDENTIAL_MIGRATION_LEASE_MS,
+    }, { merge: true });
+    return true;
   });
-  await completeBatch.commit();
-  return { alreadyComplete: false, migratedDocuments };
+
+  try {
+    for (const collectionName of CONFIDENTIAL_COLLECTIONS) {
+      currentCollection = collectionName;
+      const snapshot = await getDocs(collection(db, collectionName));
+      const docs = snapshot.docs;
+      counts[collectionName] = snapshot.size;
+      totalDocuments += snapshot.size;
+
+      const existingPrivateSnapshot = await getDocs(query(
+        collection(db, PRIVATE_COLLECTION),
+        where('sourceCollection', '==', collectionName),
+      ));
+      const existingPrivateById = new Map<string, ConfidentialRecord>();
+      existingPrivateSnapshot.forEach((privateSnapshot) => {
+        const privateData = privateSnapshot.data();
+        if (typeof privateData.sourceId === 'string' && privateData.payload && typeof privateData.payload === 'object') {
+          existingPrivateById.set(privateData.sourceId, privateData.payload as ConfidentialRecord);
+        }
+      });
+
+      if (!await renewLease({
+        currentCollection,
+        currentCollectionProcessed: 0,
+        currentCollectionTotal: docs.length,
+        migratedDocuments,
+        totalDocuments,
+        counts: { ...counts },
+      })) {
+        return { alreadyComplete: true, migratedDocuments };
+      }
+
+      for (let offset = 0; offset < docs.length; offset += 200) {
+        const batchDocs = docs.slice(offset, offset + 200);
+        if (!await renewLease({
+          currentCollection,
+          currentCollectionProcessed: offset,
+          currentCollectionTotal: docs.length,
+          migratedDocuments,
+          totalDocuments,
+          counts: { ...counts },
+        })) {
+          return { alreadyComplete: true, migratedDocuments };
+        }
+
+        const batch = firestoreWriteBatch(db);
+        batchDocs.forEach((docSnapshot) => {
+          const publicData = docSnapshot.data() as ConfidentialRecord;
+          const existingPrivate = existingPrivateById.get(docSnapshot.id) || {};
+          const fullRecord = mergeConfidentialDocument(collectionName, publicData, existingPrivate) as ConfidentialRecord;
+          stageConfidentialWrite(batch, collectionName, docSnapshot.id, fullRecord);
+        });
+        await batch.commit();
+        migratedDocuments += batchDocs.length;
+        if (!await renewLease({
+          currentCollection,
+          currentCollectionProcessed: offset + batchDocs.length,
+          currentCollectionTotal: docs.length,
+          migratedDocuments,
+          totalDocuments,
+          counts: { ...counts },
+        })) {
+          return { alreadyComplete: true, migratedDocuments };
+        }
+      }
+    }
+
+    const completed = await runTransaction(db, async (transaction) => {
+      const markerSnapshot = await transaction.get(markerRef);
+      const marker = markerSnapshot.exists() ? markerSnapshot.data() : undefined;
+      if (marker?.status === 'complete' && marker.version === 1) return false;
+      if (!markerSnapshot.exists() || marker?.leaseId !== runId) {
+        throw new Error('confidential-migration-lease-lost');
+      }
+      transaction.set(markerRef, {
+        status: 'complete',
+        version: 1,
+        completedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        migratedDocuments,
+        totalDocuments,
+        counts,
+        currentCollection: null,
+        currentCollectionProcessed: totalDocuments,
+        currentCollectionTotal: totalDocuments,
+        errorCode: null,
+        failedCollection: null,
+        leaseId: '',
+        leaseUntilMs: 0,
+      }, { merge: true });
+      return true;
+    });
+    return { alreadyComplete: !completed, migratedDocuments };
+  } catch (error) {
+    const errorCode = typeof (error as { code?: unknown } | null)?.code === 'string'
+      ? (error as { code: string }).code
+      : (error instanceof Error && error.message === 'confidential-migration-lease-lost'
+        ? 'migration-lease-lost'
+        : 'migration-failed');
+    try {
+      await runTransaction(db, async (transaction) => {
+        const markerSnapshot = await transaction.get(markerRef);
+        const marker = markerSnapshot.exists() ? markerSnapshot.data() : undefined;
+        if (marker?.leaseId !== runId) return;
+        transaction.set(markerRef, {
+          status: 'error',
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          migratedDocuments,
+          totalDocuments,
+          counts,
+          currentCollection,
+          errorCode,
+          failedCollection: currentCollection,
+          leaseId: '',
+          leaseUntilMs: 0,
+        }, { merge: true });
+      });
+    } catch (markerError) {
+      console.error('Could not record confidential migration failure status.', markerError);
+    }
+    throw error;
+  }
+}
+
+export function migrateConfidentialDataToOwnerPrivate(forceResume = false): Promise<ConfidentialMigrationResult> {
+  if (localConfidentialMigrationTask) return localConfidentialMigrationTask;
+  localConfidentialMigrationTask = runConfidentialDataMigration(forceResume).finally(() => {
+    localConfidentialMigrationTask = null;
+  });
+  return localConfidentialMigrationTask;
 }
 
 // Test initial connection
@@ -1147,42 +1388,19 @@ export const subscribeToAppUsers = (
 export const saveAppUserCloud = async (user: AppUser, previousEmail?: string) => {
   await ensureAuth();
   if (!isOwnerSession()) throw new Error('إدارة حسابات الموظفين متاحة للمالك فقط.');
+  let confidentialMigrationComplete = user.role === 'OWNER';
   if (user.role !== 'OWNER') {
     const migration = await getDoc(doc(db, PRIVATE_COLLECTION, PRIVATE_MIGRATION_MARKER));
-    if (migration.data()?.status !== 'complete') {
+    const migrationData = migration.data();
+    confidentialMigrationComplete = migrationData?.status === 'complete' && migrationData?.version === 1;
+    if (user.isActive && !confidentialMigrationComplete) {
       throw new Error('لا يمكن تفعيل مستخدم محدود قبل اكتمال عزل البيانات الخاصة.');
     }
   }
-  const protectedManagerPermissions: Partial<AppUser['permissions']> = {
-    canEditProductCost: false,
-    canViewCosts: false,
-    canViewProfits: false,
-    canViewCostAndProfit: false,
-    canViewProfitAndCosts: false,
-    canViewExecutiveDashboard: false,
-    canViewVaults: false,
-    canRequestWithdrawal: false,
-    canApproveWithdrawal: false,
-    canInjectCapital: false,
-    canTransferBetweenVaults: false,
-    canWithdrawOwnerProfit: false,
-    canEditBudget: false,
-    canEditSalaries: false,
-    canEditCommissions: false,
-    canViewExpenses: false,
-    canManageSettings: false,
-    canManageUsers: false,
-    canViewAuditLog: false,
-    canViewAuditLogs: false,
-    canAccessOperationsSystem: false,
-    canEditSettingsAndBudgets: false,
-    canExportData: false,
-    canDeleteInvoices: false,
-  };
   const safeUser: AppUser = {
     ...user,
-    permissions: user.role === 'STORE_MANAGER'
-      ? { ...user.permissions, ...protectedManagerPermissions }
+    permissions: user.role !== 'OWNER'
+      ? { ...user.permissions, ...OWNER_ONLY_PERMISSION_OVERRIDES }
       : user.permissions,
     passwordHash: '',
     requiresPasswordChange: false,
@@ -1200,6 +1418,7 @@ export const saveAppUserCloud = async (user: AppUser, previousEmail?: string) =>
       displayName: safeUser.displayName,
       role: safeUser.role,
       isActive: safeUser.isActive,
+      migrationReady: safeUser.role === 'OWNER' || (safeUser.isActive && confidentialMigrationComplete),
       permissions: safeUser.permissions,
       updatedAt: new Date().toISOString(),
     }), { merge: true });

@@ -212,7 +212,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   // Approved Operational Rules:
   // الموازنة الثابتة الشهرية = 15,000 جنيه | أساس التخطيط = 25 يوماً | المخصص التخطيطي اليومي = 600 جنيه
-  const fixedMonthlyBudget = settings.monthlyFixedBudget || 15000;
+  const fixedMonthlyBudget = isOwner ? (settings.monthlyFixedBudget || 15000) : 0;
   const workDays = settings.monthlyWorkDays || 25;
   const dailyOperatingCost = fixedMonthlyBudget / workDays; // 600 EGP per day (المخصص التخطيطي اليومي - ليس مصروفاً نقدياً يومياً)
 
@@ -1316,6 +1316,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         );
 
                       case 'monthly_budget_15k':
+                        if (!isOwner) return null;
                         return (
                           <div
                             key={cardItem.id}

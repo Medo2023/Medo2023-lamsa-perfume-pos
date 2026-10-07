@@ -143,6 +143,9 @@ import {
   posRealtimeChannel,
   signOutFirebaseUser,
   loadAuthorizedAppUser,
+  migrateConfidentialDataToOwnerPrivate,
+  subscribeConfidentialMigrationStatus,
+  type ConfidentialMigrationStatus,
   onFirebaseAuthStateChanged,
   getCurrentFirebaseUser,
   getGoogleSignInErrorMessage,
@@ -819,6 +822,15 @@ const App: React.FC = () => {
   const [cloudSyncError, setCloudSyncError] = useState(false);
   const [isOwnerLiveRadarOpen, setIsOwnerLiveRadarOpen] = useState<boolean>(false);
   const [isPWAInstallModalOpen, setIsPWAInstallModalOpen] = useState<boolean>(false);
+  const [confidentialMigrationStatus, setConfidentialMigrationStatus] = useState<ConfidentialMigrationStatus | null>(null);
+
+  useEffect(() => {
+    if (currentUser?.role !== 'OWNER') {
+      setConfidentialMigrationStatus(null);
+      return;
+    }
+    return subscribeConfidentialMigrationStatus(setConfidentialMigrationStatus);
+  }, [currentUser?.role]);
 
   useEffect(() => {
     const updateNetworkStatus = () => setIsCloudConnectedValue(navigator.onLine);
@@ -2654,6 +2666,8 @@ const App: React.FC = () => {
             currentUser={currentUser}
             onSaveUser={handleSaveUser}
             onAddAuditLog={handleAddAuditLog}
+            migrationStatus={confidentialMigrationStatus}
+            onResumeMigration={() => migrateConfidentialDataToOwnerPrivate(true)}
           />
         );
       case View.AUDIT_LOGS:

@@ -1,11 +1,22 @@
 import { AppUser, UserPermissions, View } from '../types';
 
+const OWNER_ONLY_PERMISSIONS = new Set<keyof UserPermissions>([
+  'canEditProductCost', 'canViewCosts', 'canViewProfits', 'canViewCostAndProfit',
+  'canViewProfitAndCosts', 'canViewExecutiveDashboard', 'canViewVaults',
+  'canRequestWithdrawal', 'canApproveWithdrawal', 'canInjectCapital',
+  'canTransferBetweenVaults', 'canWithdrawOwnerProfit', 'canEditBudget',
+  'canEditSalaries', 'canEditCommissions', 'canViewExpenses', 'canManageSettings',
+  'canManageUsers', 'canViewAuditLog', 'canViewAuditLogs', 'canAccessOperationsSystem',
+  'canEditSettingsAndBudgets', 'canExportData', 'canDeleteInvoices',
+]);
+
 /**
  * Checks if user possesses a specific granular permission
  */
 export function hasPermission(user: AppUser | null, permission: keyof UserPermissions): boolean {
   if (!user || !user.isActive) return false;
   if (user.role === 'OWNER') return true; // Full control for owner
+  if (OWNER_ONLY_PERMISSIONS.has(permission)) return false;
   return !!user.permissions[permission];
 }
 
@@ -15,7 +26,7 @@ export function hasPermission(user: AppUser | null, permission: keyof UserPermis
 export function canViewProfits(user: AppUser | null): boolean {
   if (!user || !user.isActive) return false;
   if (user.role === 'OWNER') return true;
-  return !!user.permissions.canViewProfits;
+  return hasPermission(user, 'canViewProfits');
 }
 
 /**
@@ -24,7 +35,7 @@ export function canViewProfits(user: AppUser | null): boolean {
 export function canViewCosts(user: AppUser | null): boolean {
   if (!user || !user.isActive) return false;
   if (user.role === 'OWNER') return true;
-  return !!user.permissions.canViewCosts;
+  return hasPermission(user, 'canViewCosts');
 }
 
 /**
@@ -33,7 +44,7 @@ export function canViewCosts(user: AppUser | null): boolean {
 export function canViewVaults(user: AppUser | null): boolean {
   if (!user || !user.isActive) return false;
   if (user.role === 'OWNER') return true;
-  return !!user.permissions.canViewVaults && !!user.permissions.canApproveWithdrawal;
+  return hasPermission(user, 'canViewVaults') && hasPermission(user, 'canApproveWithdrawal');
 }
 
 /**
@@ -62,7 +73,7 @@ export function canAccessView(user: AppUser | null, view: View | string): boolea
       return true;
 
     case View.DASHBOARD:
-      return p.canViewExecutiveDashboard === true;
+      return hasPermission(user, 'canViewExecutiveDashboard');
 
     case View.REPORTS:
       // Allow access to Sales & Invoices Ledger (profit/cost columns remain role-protected inside)
@@ -85,22 +96,22 @@ export function canAccessView(user: AppUser | null, view: View | string): boolea
       return p.canViewVaults && p.canApproveWithdrawal;
 
     case View.EXPENSES:
-      return p.canViewExpenses === true || p.canEditBudget === true;
+      return hasPermission(user, 'canViewExpenses') || hasPermission(user, 'canEditBudget');
 
     case View.OPERATIONS_SYSTEM:
-      return p.canAccessOperationsSystem === true && p.canEditBudget === true;
+      return hasPermission(user, 'canAccessOperationsSystem') && hasPermission(user, 'canEditBudget');
 
     case View.SETTINGS:
-      return p.canManageSettings === true;
+      return hasPermission(user, 'canManageSettings');
 
     case View.USERS_MANAGEMENT:
-      return p.canManageUsers === true;
+      return hasPermission(user, 'canManageUsers');
 
     case View.AUDIT_LOGS:
-      return p.canViewAuditLog === true;
+      return hasPermission(user, 'canViewAuditLog');
 
     case View.STORE_MANAGER:
-      return p.canExportData === true;
+      return hasPermission(user, 'canExportData');
 
     case View.MARKETING:
       return true;
