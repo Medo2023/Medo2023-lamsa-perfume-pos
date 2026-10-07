@@ -174,6 +174,10 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
           </button>
 
           <p className="text-[10px] text-zinc-400 text-center leading-5">
+            سيفتح Google في نافذة منفصلة؛ أكمل الدخول وانتظر عودتك تلقائياً إلى الموقع. إذا حظر المتصفح النافذة، اسمح بالنوافذ المنبثقة لهذا الموقع.
+          </p>
+
+          <p className="text-[10px] text-zinc-400 text-center leading-5">
             إذا فتحت الرابط داخل واتساب أو متصفح مضمّن، اضغط رمز الفتح الخارجي أعلى الشاشة واختر Chrome أو Safari؛ بعض المتصفحات المضمّنة تمنع تسجيل Google.
           </p>
 

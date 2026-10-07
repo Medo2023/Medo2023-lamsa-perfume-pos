@@ -22,11 +22,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   onAuthStateChanged,
-  browserLocalPersistence,
-  setPersistence,
   signOut,
   type User
 } from 'firebase/auth';
@@ -141,29 +137,16 @@ export const loadAuthorizedAppUser = async (firebaseUser: User): Promise<AppUser
   };
 };
 
-export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser | null> => {
-  await setPersistence(auth, browserLocalPersistence);
+export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser> => {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
-  const isMobileBrowser = typeof navigator !== 'undefined'
-    && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  if (isMobileBrowser) {
-    await signInWithRedirect(auth, provider);
-    return null;
-  }
-
+  // GitHub Pages is cross-origin from Firebase authDomain. Firebase recommends
+  // popup sign-in for non-Firebase hosting to avoid redirect storage loops.
   try {
     const credential = await signInWithPopup(auth, provider);
     return await loadAuthorizedAppUser(credential.user);
   } catch (error) {
-    const code = (error as { code?: string })?.code;
-    if (code === 'auth/popup-blocked'
-      || code === 'auth/popup-closed-by-user'
-      || code === 'auth/operation-not-supported-in-this-environment') {
-      await signInWithRedirect(auth, provider);
-      return null;
-    }
     if (!isTransientFirebaseError(error)) {
       await signOut(auth).catch(() => {});
     }
@@ -174,8 +157,6 @@ export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser | null> 
 export const onFirebaseAuthStateChanged = (callback: (firebaseUser: User | null) => void) =>
   onAuthStateChanged(auth, callback);
 
-export const getGoogleRedirectResult = () => getRedirectResult(auth);
-
 export const isTransientFirebaseError = (error: unknown): boolean => {
   const code = (error as { code?: string } | null)?.code || '';
   const online = typeof navigator === 'undefined' || navigator.onLine;
@@ -184,8 +165,14 @@ export const isTransientFirebaseError = (error: unknown): boolean => {
 
 export const getGoogleSignInErrorMessage = (error: unknown): string => {
   const code = (error as { code?: string } | null)?.code || '';
-  if (['auth/popup-closed-by-user', 'auth/popup-blocked', 'auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment', 'auth/redirect-cancelled-by-user'].includes(code)) {
-    return 'تعذّر إكمال تسجيل Google داخل هذا المتصفح. افتح رابط الموقع مباشرة في Chrome أو Safari ثم أعد المحاولة.';
+  if (code === 'auth/popup-blocked') {
+    return 'حظر المتصفح نافذة Google. اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/redirect-cancelled-by-user') {
+    return 'أُغلقت نافذة Google قبل اكتمال الدخول. أعد المحاولة واترك النافذة حتى تعود إلى الموقع.';
+  }
+  if (code === 'auth/web-storage-unsupported' || code === 'auth/operation-not-supported-in-this-environment') {
+    return 'هذا المتصفح لا يدعم نافذة تسجيل Google. افتح الرابط مباشرة في Chrome أو Safari ثم أعد المحاولة.';
   }
   if (code === 'auth/unauthorized-domain') {
     return 'عنوان الموقع غير مسموح به في إعدادات Firebase Authentication.';

@@ -143,7 +143,6 @@ import {
   signOutFirebaseUser,
   loadAuthorizedAppUser,
   onFirebaseAuthStateChanged,
-  getGoogleRedirectResult,
   getCurrentFirebaseUser,
   getGoogleSignInErrorMessage,
   isTransientFirebaseError
@@ -1725,9 +1724,6 @@ const App: React.FC = () => {
       if (firebaseUser) void restoreSavedSession(firebaseUser);
     };
     window.addEventListener('online', retryWhenOnline);
-    getGoogleRedirectResult().catch((error) => {
-      if (active) setAuthRestoreError(getGoogleSignInErrorMessage(error));
-    });
 
     return () => {
       active = false;
