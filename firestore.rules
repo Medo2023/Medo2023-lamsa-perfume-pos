@@ -93,6 +93,25 @@ service cloud.firestore {
       ]);
     }
 
+    function safeDevicePresence(data) {
+      return data.keys().hasOnly([
+          'userUid', 'email', 'displayName', 'deviceId', 'deviceType', 'lastSeenAt'
+        ])
+        && data.keys().hasAll([
+          'userUid', 'email', 'displayName', 'deviceId', 'deviceType', 'lastSeenAt'
+        ])
+        && data.userUid is string
+        && data.email is string
+        && data.email == request.auth.token.email
+        && data.displayName is string
+        && data.displayName.size() <= 120
+        && data.deviceId is string
+        && data.deviceId.size() >= 16
+        && data.deviceId.size() <= 64
+        && data.deviceType in ['phone', 'tablet', 'computer']
+        && data.lastSeenAt == request.time;
+    }
+
     function safeClosure(data) {
       return data.keys().hasOnly([
         'id', 'date', 'status', 'openedAt', 'openedBy', 'closedAt', 'closedBy',
@@ -155,6 +174,20 @@ service cloud.firestore {
 
     match /app_users/{userId} {
       allow read, write: if isOwner();
+    }
+
+    match /device_presence/{deviceRecordId} {
+      allow read: if isOwner();
+      allow create: if activeMember()
+        && safeDevicePresence(request.resource.data)
+        && request.resource.data.userUid == request.auth.uid;
+      allow update: if activeMember()
+        && resource.data.userUid == request.auth.uid
+        && request.resource.data.userUid == resource.data.userUid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.deviceId == resource.data.deviceId
+        && safeDevicePresence(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /sales/{saleId} {

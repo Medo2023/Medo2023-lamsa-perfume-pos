@@ -143,6 +143,7 @@ import {
   posRealtimeChannel,
   signOutFirebaseUser,
   loadAuthorizedAppUser,
+  startDevicePresenceTracking,
   migrateConfidentialDataToOwnerPrivate,
   subscribeConfidentialMigrationStatus,
   type ConfidentialMigrationStatus,
@@ -511,6 +512,11 @@ const App: React.FC = () => {
   });
 
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+
+  useEffect(() => {
+    if (!currentUser || !currentUser.isActive) return;
+    return startDevicePresenceTracking(currentUser);
+  }, [currentUser?.id, currentUser?.authEmail, currentUser?.displayName, currentUser?.isActive]);
 
   // Apple Top Dynamic Island Notifications State
   const [topNotifications, setTopNotifications] = useState<AppleNotificationItem[]>([]);

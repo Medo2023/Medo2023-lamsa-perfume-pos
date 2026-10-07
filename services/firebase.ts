@@ -23,6 +23,8 @@ import {
   getDocFromServer,
   updateDoc,
   runTransaction,
+  serverTimestamp,
+  type Timestamp,
   type Firestore
 } from 'firebase/firestore';
 import {
@@ -1438,6 +1440,116 @@ export const seedInitialUsersCloud = async (users: AppUser[]) => {
     batch.set(docRef, cleanForFirestore({ ...u, passwordHash: '', requiresPasswordChange: false }), { merge: true });
   });
   await batch.commit();
+};
+
+export type ManagedDeviceType = 'phone' | 'tablet' | 'computer';
+
+export interface DevicePresenceRecord {
+  id: string;
+  userUid: string;
+  email: string;
+  displayName: string;
+  deviceId: string;
+  deviceType: ManagedDeviceType;
+  lastSeenAt: Timestamp;
+}
+
+const createLocalDeviceId = (): string => {
+  try {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+  }
+};
+
+const getLocalDeviceId = (uid: string, email: string): string => {
+  const storageKey = `lamsa_device_key_v1_${uid}_${encodeURIComponent(email.toLowerCase())}`;
+  try {
+    const savedId = localStorage.getItem(storageKey);
+    if (savedId && /^[a-f0-9]{32}$/i.test(savedId)) return savedId;
+    const deviceId = createLocalDeviceId();
+    localStorage.setItem(storageKey, deviceId);
+    return deviceId;
+  } catch {
+    return createLocalDeviceId();
+  }
+};
+
+const getCurrentDeviceType = (): ManagedDeviceType => {
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  if (/ipad|tablet|android(?!.*mobile)/i.test(userAgent) ||
+      (/macintosh/i.test(userAgent) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1)) {
+    return 'tablet';
+  }
+  if (/iphone|ipod|mobile|windows phone/i.test(userAgent)) return 'phone';
+  return 'computer';
+};
+
+/** Records only the signed-in browser's broad device type and last-seen time. */
+export const startDevicePresenceTracking = (appUser: AppUser): (() => void) => {
+  const firebaseUser = auth.currentUser;
+  if (typeof window === 'undefined' || !firebaseUser?.uid || !firebaseUser.email ||
+      firebaseUser.isAnonymous || !appUser.isActive) return () => {};
+
+  const email = firebaseUser.email;
+  const deviceId = getLocalDeviceId(firebaseUser.uid, email);
+  const deviceRef = doc(db, 'device_presence', `${firebaseUser.uid}_${deviceId}`);
+  const deviceType = getCurrentDeviceType();
+  let lastWriteAt = 0;
+
+  const updatePresence = () => {
+    if (document.visibilityState !== 'visible' || !navigator.onLine || auth.currentUser?.uid !== firebaseUser.uid) return;
+    const now = Date.now();
+    if (now - lastWriteAt < 60_000) return;
+    lastWriteAt = now;
+    void firestoreSetDoc(deviceRef, {
+      userUid: firebaseUser.uid,
+      email,
+      displayName: appUser.displayName.slice(0, 120),
+      deviceId,
+      deviceType,
+      lastSeenAt: serverTimestamp(),
+    }, { merge: true }).catch((error) => {
+      console.warn('Device last-seen update failed.', error);
+    });
+  };
+
+  updatePresence();
+  const heartbeat = window.setInterval(updatePresence, 120_000);
+  document.addEventListener('visibilitychange', updatePresence);
+  window.addEventListener('focus', updatePresence);
+  window.addEventListener('online', updatePresence);
+
+  return () => {
+    window.clearInterval(heartbeat);
+    document.removeEventListener('visibilitychange', updatePresence);
+    window.removeEventListener('focus', updatePresence);
+    window.removeEventListener('online', updatePresence);
+  };
+};
+
+/** Owner-only live view of recent device presence records. */
+export const subscribeToDevicePresence = (onUpdate: (devices: DevicePresenceRecord[]) => void) => {
+  if (!isOwnerSession()) {
+    onUpdate([]);
+    return () => {};
+  }
+
+  const devicesQuery = query(
+    collection(db, 'device_presence'),
+    orderBy('lastSeenAt', 'desc'),
+    limit(200),
+  );
+  return onSnapshot(devicesQuery, (snapshot) => {
+    onUpdate(snapshot.docs.map((deviceDoc) => ({
+      ...deviceDoc.data(),
+      id: deviceDoc.id,
+    } as DevicePresenceRecord)));
+  }, (error) => {
+    console.error('Unable to load owner-only device presence records.', error);
+  });
 };
 
 // ========================================================

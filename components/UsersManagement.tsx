@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   AppUser, 
   UserRole, 
@@ -24,9 +24,14 @@ import {
   EyeOff, 
   UserX, 
   CheckCircle2,
-  Sliders
+  Sliders,
+  Smartphone,
+  Tablet,
+  Monitor,
+  Clock3
 } from 'lucide-react';
-import type { ConfidentialMigrationResult, ConfidentialMigrationStatus } from '../services/firebase';
+import { subscribeToDevicePresence } from '../services/firebase';
+import type { DevicePresenceRecord, ConfidentialMigrationResult, ConfidentialMigrationStatus } from '../services/firebase';
 
 interface UsersManagementProps {
   users: AppUser[];
@@ -93,6 +98,14 @@ const PERMISSION_LABELS: Partial<Record<keyof UserPermissions, { label: string; 
   canAccessOperationsSystem: { label: 'الوصول لنظام التارجت والموازنة المعتمدة', group: 'أسرار الإدارة والسرية' },
 };
 
+const ROLE_LABELS: Record<UserRole, string> = {
+  OWNER: 'مالك (تحكم كامل)',
+  STORE_MANAGER: 'مسؤول تشغيل',
+  CASHIER: 'كاشير ومبيعات',
+  SALES_REP: 'بائع ومسوق ميداني',
+  INVENTORY_KEEPER: 'أمين مخزون وخامات',
+};
+
 const UsersManagement: React.FC<UsersManagementProps> = ({
   users,
   currentUser,
@@ -116,6 +129,31 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
   const [formRole, setFormRole] = useState<UserRole>('CASHIER');
   const [formPermissions, setFormPermissions] = useState<UserPermissions>(TAREK_OPERATIONAL_PERMISSIONS);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [devices, setDevices] = useState<DevicePresenceRecord[]>([]);
+  const [deviceClock, setDeviceClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isOwner) {
+      setDevices([]);
+      return;
+    }
+    return subscribeToDevicePresence(setDevices);
+  }, [isOwner]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setDeviceClock(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const isDeviceOnline = (device: DevicePresenceRecord) =>
+    device.lastSeenAt.toMillis() >= deviceClock - 5 * 60_000;
+  const formatDeviceLastSeen = (device: DevicePresenceRecord) => {
+    const ageMs = Math.max(0, deviceClock - device.lastSeenAt.toMillis());
+    if (ageMs < 60_000) return 'الآن';
+    if (ageMs < 60 * 60_000) return `منذ ${Math.floor(ageMs / 60_000)} دقيقة`;
+    if (ageMs < 24 * 60 * 60_000) return `منذ ${Math.floor(ageMs / (60 * 60_000))} ساعة`;
+    return device.lastSeenAt.toDate().toLocaleString('ar-EG');
+  };
 
   // Open Edit Modal for a User
   const handleEditUser = (user: AppUser) => {
@@ -434,6 +472,7 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                     )}
                   </div>
                   <span className="text-xs text-[#86868B] font-mono block">@{u.username}</span>
+                  <span dir="ltr" className="text-[11px] text-[#6B7280] font-mono block text-right">{u.authEmail || 'البريد غير محدد'}</span>
                 </div>
 
                 <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
@@ -441,7 +480,7 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
                     ? 'bg-amber-100 text-amber-900 border border-amber-300' 
                     : 'bg-blue-50 text-blue-800 border border-blue-200'
                 }`}>
-                  {isOwnerUser ? 'مالك (تحكم كامل)' : 'مسؤول تشغيل'}
+                  {ROLE_LABELS[u.role]}
                 </span>
               </div>
 
@@ -492,6 +531,60 @@ const UsersManagement: React.FC<UsersManagementProps> = ({
           );
         })}
       </div>
+
+      <section className="p-4 rounded-2xl bg-white border border-black/[0.08] shadow-apple space-y-4" aria-live="polite">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
+              <Smartphone size={18} />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-[#1D1D1F]">الأجهزة والمتصفحات المسجلة</h2>
+              <p className="text-[11px] text-[#86868B]">{devices.length} سجل · {devices.filter(isDeviceOnline).length} نشط خلال آخر 5 دقائق</p>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-[#5F6368] bg-slate-50 border border-slate-200 rounded-xl p-3">
+          يعرض هذا القسم نوع الجهاز وآخر ظهور فقط؛ يُحدّث الظهور كل دقيقتين أثناء فتح التطبيق وظهوره على الشاشة، ويُعد غير متصل بعد 5 دقائق بلا تحديث. لا يُجمع الموقع الجغرافي أو عنوان IP أو الشاشة الحالية، ولا يتيح هذا العرض إيقاف الجلسة عن بُعد.
+        </p>
+
+        {devices.length === 0 ? (
+          <div className="py-6 text-center text-xs text-[#86868B]">
+            لم تُسجّل أجهزة بعد. سيظهر الجهاز بعد دخول حساب Google معتمد وفتح التطبيق.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {devices.map((device) => {
+              const employee = users.find((user) => (user.authEmail || '').trim().toLowerCase() === device.email.trim().toLowerCase());
+              const online = isDeviceOnline(device);
+              const DeviceIcon = device.deviceType === 'phone'
+                ? Smartphone
+                : device.deviceType === 'tablet'
+                  ? Tablet
+                  : Monitor;
+              return (
+                <div key={device.id} className="p-3 rounded-2xl border border-black/[0.08] bg-white flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 shrink-0 rounded-xl bg-black/[0.03] text-[#5F6368] flex items-center justify-center">
+                      <DeviceIcon size={19} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-[#1D1D1F] truncate">{employee?.displayName || device.displayName}</div>
+                      <div dir="ltr" className="text-[10px] font-mono text-[#86868B] truncate text-right">{employee?.authEmail || device.email}</div>
+                      <div className="text-[10px] text-[#86868B] mt-1">{device.deviceType === 'phone' ? 'هاتف' : device.deviceType === 'tablet' ? 'جهاز لوحي' : 'حاسوب'} · <Clock3 size={10} className="inline" /> {formatDeviceLastSeen(device)}</div>
+                    </div>
+                  </div>
+                  <span className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold ${online ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                    {online ? 'نشط الآن' : 'غير متصل'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* CREATE / EDIT USER MODAL */}
       {(isCreatingNew || selectedUser) && (
