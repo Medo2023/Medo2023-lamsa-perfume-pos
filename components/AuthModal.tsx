@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AppUser } from '../types';
-import { signInWithGoogleAndLoadAppUser } from '../services/firebase';
+import { getGoogleSignInErrorMessage, signInWithGoogleAndLoadAppUser } from '../services/firebase';
 import { AlertCircle, CheckCircle2, Crown, Loader2, X } from 'lucide-react';
 
 interface AuthModalProps {
@@ -21,9 +21,9 @@ const AuthModal: React.FC<AuthModalProps> = ({ currentUser, onLoginSuccess, onCl
     setIsSigningIn(true);
     try {
       const user = await signInWithGoogleAndLoadAppUser();
-      onLoginSuccess({ ...user, lastLoginAt: new Date().toISOString() });
+      if (user) onLoginSuccess({ ...user, lastLoginAt: new Date().toISOString() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذّر تسجيل الدخول بحساب Google. حاول مرة أخرى.');
+      setError(getGoogleSignInErrorMessage(err));
     } finally {
       setIsSigningIn(false);
     }

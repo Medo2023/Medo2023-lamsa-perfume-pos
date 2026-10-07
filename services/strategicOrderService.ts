@@ -9,7 +9,7 @@ import {
   getApprovedOilGramCost,
   isLiveProductionSale
 } from '../types';
-import { db, cleanForFirestore, handleFirestoreError, OperationType } from './firebase';
+import { db, cleanForFirestore, handleFirestoreError, OperationType, queueFirestoreWrite } from './firebase';
 import { collection, doc, setDoc, onSnapshot, getDocs } from 'firebase/firestore';
 
 const LOCAL_STORAGE_ORDERS_KEY = 'lamsa_strategic_orders_v1';
@@ -292,7 +292,7 @@ export const saveStrategicOrderCloud = async (order: StrategicReplenishmentOrder
   const path = 'replenishment_orders';
   try {
     const cleaned = cleanForFirestore(order);
-    await setDoc(doc(db, path, order.id), cleaned);
+    await queueFirestoreWrite(setDoc(doc(db, path, order.id), cleaned), 'replenishment order');
 
     const current = getLocalStrategicOrders();
     const updated = [cleaned, ...current.filter(o => o.id !== order.id)];

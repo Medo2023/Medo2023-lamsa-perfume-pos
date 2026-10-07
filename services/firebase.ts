@@ -1,19 +1,35 @@
 import { initializeApp } from 'firebase/app';
 import { 
-  getFirestore, 
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection, 
   doc, 
-  setDoc, 
+  setDoc as firestoreSetDoc,
   getDoc, 
+  getDocFromCache,
   getDocs, 
-  deleteDoc, 
+  deleteDoc as firestoreDeleteDoc,
   onSnapshot, 
-  writeBatch,
+  writeBatch as firestoreWriteBatch,
   query,
   orderBy,
-  getDocFromServer
+  getDocFromServer,
+  type Firestore
 } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  onAuthStateChanged,
+  browserLocalPersistence,
+  setPersistence,
+  signOut,
+  type User
+} from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 import { 
   Product, 
@@ -49,9 +65,21 @@ export const auth = getAuth(app);
 
 // Initialize Firestore targeting the specific provisioned database
 const dbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
-export const db = dbId && dbId !== '(default)'
-  ? getFirestore(app, dbId)
-  : getFirestore(app);
+export const db = (() => {
+  try {
+    const settings = {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    };
+    return dbId && dbId !== '(default)'
+      ? initializeFirestore(app, settings, dbId)
+      : initializeFirestore(app, settings);
+  } catch (error) {
+    console.warn('Persistent Firestore cache is unavailable; using the default cache.', error);
+    return dbId && dbId !== '(default)'
+      ? getFirestore(app, dbId)
+      : getFirestore(app);
+  }
+})();
 
 const rolePermissions = (role: UserRole): AppUser['permissions'] => {
   if (role === 'OWNER') return OWNER_FULL_PERMISSIONS;
@@ -66,7 +94,22 @@ export const loadAuthorizedAppUser = async (firebaseUser: User): Promise<AppUser
     throw new Error('يلزم الدخول بحساب Google موثّق.');
   }
 
-  const profileSnap = await getDoc(doc(db, 'authorized_users', email));
+  const profileRef = doc(db, 'authorized_users', email);
+  let profileSnap;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    profileSnap = await getDocFromCache(profileRef);
+  } else {
+    try {
+      profileSnap = await getDoc(profileRef);
+    } catch (error) {
+      if (!isTransientFirebaseError(error)) throw error;
+      try {
+        profileSnap = await getDocFromCache(profileRef);
+      } catch {
+        throw error;
+      }
+    }
+  }
   if (!profileSnap.exists()) {
     throw new Error('هذا الحساب غير مضاف إلى قائمة موظفي المتجر. اطلب من المالك إضافة بريد Google أولاً.');
   }
@@ -98,21 +141,68 @@ export const loadAuthorizedAppUser = async (firebaseUser: User): Promise<AppUser
   };
 };
 
-export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser> => {
+export const signInWithGoogleAndLoadAppUser = async (): Promise<AppUser | null> => {
+  await setPersistence(auth, browserLocalPersistence);
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  const credential = await signInWithPopup(auth, provider);
+
+  const isMobileBrowser = typeof navigator !== 'undefined'
+    && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (isMobileBrowser) {
+    await signInWithRedirect(auth, provider);
+    return null;
+  }
+
   try {
+    const credential = await signInWithPopup(auth, provider);
     return await loadAuthorizedAppUser(credential.user);
   } catch (error) {
-    await signOut(auth).catch(() => {});
+    const code = (error as { code?: string })?.code;
+    if (code === 'auth/popup-blocked'
+      || code === 'auth/popup-closed-by-user'
+      || code === 'auth/operation-not-supported-in-this-environment') {
+      await signInWithRedirect(auth, provider);
+      return null;
+    }
+    if (!isTransientFirebaseError(error)) {
+      await signOut(auth).catch(() => {});
+    }
     throw error;
   }
+};
+
+export const onFirebaseAuthStateChanged = (callback: (firebaseUser: User | null) => void) =>
+  onAuthStateChanged(auth, callback);
+
+export const getGoogleRedirectResult = () => getRedirectResult(auth);
+
+export const isTransientFirebaseError = (error: unknown): boolean => {
+  const code = (error as { code?: string } | null)?.code || '';
+  const online = typeof navigator === 'undefined' || navigator.onLine;
+  return !online || ['unavailable', 'deadline-exceeded', 'auth/network-request-failed', 'network-request-failed'].includes(code);
+};
+
+export const getGoogleSignInErrorMessage = (error: unknown): string => {
+  const code = (error as { code?: string } | null)?.code || '';
+  if (['auth/popup-closed-by-user', 'auth/popup-blocked', 'auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment', 'auth/redirect-cancelled-by-user'].includes(code)) {
+    return 'تعذّر إكمال تسجيل Google داخل هذا المتصفح. افتح رابط الموقع مباشرة في Chrome أو Safari ثم أعد المحاولة.';
+  }
+  if (code === 'auth/unauthorized-domain') {
+    return 'عنوان الموقع غير مسموح به في إعدادات Firebase Authentication.';
+  }
+  if (code === 'auth/network-request-failed' || code === 'unavailable') {
+    return 'تعذّر الاتصال بخدمة Google أو Firebase. تحقق من الإنترنت ثم أعد المحاولة.';
+  }
+  return error instanceof Error && !error.message.startsWith('Firebase: Error (')
+    ? error.message
+    : 'تعذّر تسجيل الدخول. أعد المحاولة من متصفح Chrome أو Safari.';
 };
 
 export const signOutFirebaseUser = async (): Promise<void> => {
   if (auth.currentUser) await signOut(auth);
 };
+
+export const getCurrentFirebaseUser = (): User | null => auth.currentUser;
 
 export const ensureAuth = async (): Promise<User> => {
   const user = auth.currentUser;
@@ -168,6 +258,37 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+export const queueFirestoreWrite = (writePromise: Promise<unknown>, operation: string): Promise<void> => {
+  void writePromise.catch((error) => {
+    const code = (error as { code?: string } | null)?.code || 'unknown';
+    console.error('Firestore write was rejected or could not sync.', { operation, code });
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    if (!isOffline && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lamsa-cloud-sync-error', { detail: { operation, code } }));
+    }
+  });
+  return Promise.resolve();
+};
+
+const setDoc = (reference: any, data: any, options?: any): Promise<void> =>
+  queueFirestoreWrite(
+    options === undefined
+      ? firestoreSetDoc(reference, data)
+      : firestoreSetDoc(reference, data, options),
+    'set'
+  );
+
+const deleteDoc = (...args: Parameters<typeof firestoreDeleteDoc>): Promise<void> =>
+  queueFirestoreWrite(firestoreDeleteDoc(...args), 'delete');
+
+const writeBatch = (database: Firestore) => {
+  const batch = firestoreWriteBatch(database);
+  const commit = batch.commit.bind(batch);
+  return Object.assign(batch, {
+    commit: () => queueFirestoreWrite(commit(), 'batch')
+  });
+};
 
 /**
  * Recursively strips keys with `undefined` values from objects or arrays.
@@ -1014,7 +1135,3 @@ export const deleteSavedMixCloud = async (mixId: string) => {
   await ensureAuth();
   await deleteDoc(doc(db, 'saved_mixes', mixId));
 };
-
-
-
-

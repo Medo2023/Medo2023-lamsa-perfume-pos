@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* Apple Design System & Arabic Typography + Dynamic Theme Engine */
 :root,
 [data-theme="apple_sonoma_light"] {
@@ -2056,7 +2060,6 @@ a:hover p,
     font-size: 0.72rem !important;
   }
 }
-
 
 
 

@@ -1,6 +1,6 @@
 import { FragranceDatabaseEntry, Product, Season, Gender, PerfumeType, TimeOfDay } from '../types';
 import { analyzePerfumeDetails, searchFragranceIntelligence } from './geminiService';
-import { db, cleanForFirestore, handleFirestoreError, OperationType } from './firebase';
+import { db, cleanForFirestore, handleFirestoreError, OperationType, queueFirestoreWrite } from './firebase';
 import { collection, doc, setDoc, getDocs, onSnapshot, writeBatch } from 'firebase/firestore';
 
 const LOCAL_STORAGE_KEY = 'lamsa_fragrance_db_v2';
@@ -813,7 +813,7 @@ export const saveFragranceProfileCloud = async (entry: FragranceDatabaseEntry): 
   const path = 'fragrance_database';
   try {
     const cleaned = cleanForFirestore(entry);
-    await setDoc(doc(db, path, entry.id), cleaned);
+    await queueFirestoreWrite(setDoc(doc(db, path, entry.id), cleaned), 'fragrance profile');
 
     // Update local cache
     const current = getLocalFragranceDatabase();
@@ -850,7 +850,7 @@ export const bulkUpsertFragranceProfilesCloud = async (
       const cleaned = cleanForFirestore(entry);
       batch.set(doc(db, path, cleaned.id), cleaned);
     });
-    await batch.commit();
+    await queueFirestoreWrite(batch.commit(), 'fragrance profiles batch');
   } catch (err) {
     console.warn('Offline/local fallback for bulkUpsertFragranceProfilesCloud:', err);
   }
@@ -866,7 +866,7 @@ export const bulkSeedFragranceDatabase = async (): Promise<void> => {
       const cleaned = cleanForFirestore(entry);
       batch.set(doc(db, path, entry.id), cleaned);
     });
-    await batch.commit();
+    await queueFirestoreWrite(batch.commit(), 'fragrance database seed');
     saveLocalFragranceDatabase(VERIFIED_SEED_FRAGRANCES);
   } catch (err) {
     console.warn('Could not bulk seed online, saved locally:', err);
@@ -917,4 +917,3 @@ export const bulkSaveEnrichedPerfumesToEncyclopedia = async (
 
   return bulkUpsertFragranceProfilesCloud(entries);
 };
-

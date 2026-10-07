@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { AppUser, DailyClosure } from '../types';
-import { signInWithGoogleAndLoadAppUser } from '../services/firebase';
-import { AlertCircle, Clock3, LockKeyhole, ShieldCheck, Sparkles, Store } from 'lucide-react';
+import { getGoogleSignInErrorMessage, signInWithGoogleAndLoadAppUser } from '../services/firebase';
+import { AlertCircle, Clock3, LockKeyhole, ShieldCheck, Sparkles, Store, WifiOff } from 'lucide-react';
 
 interface AppleWelcomeLockScreenProps {
   users: AppUser[];
   currentClosure: DailyClosure | null;
   onUnlock: (user: AppUser) => void;
   onUpdateUser?: (user: AppUser) => void;
+  savedSessionUser?: AppUser | null;
+  isCheckingSavedSession?: boolean;
+  authRestoreError?: string | null;
+  onResumeSavedSession?: () => void;
   storeName?: string;
   storeSlogan?: string;
 }
@@ -15,16 +19,31 @@ interface AppleWelcomeLockScreenProps {
 export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
   currentClosure,
   onUnlock,
+  savedSessionUser = null,
+  isCheckingSavedSession = false,
+  authRestoreError = null,
+  onResumeSavedSession,
   storeName = 'لَمْسَةُ عِطْر',
   storeSlogan = 'فخامة العطور الشرقية والفرنسية'
 }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [error, setError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
   }, []);
 
   const timeFormatted = currentTime.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -45,9 +64,9 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
     setIsSigningIn(true);
     try {
       const user = await signInWithGoogleAndLoadAppUser();
-      onUnlock({ ...user, lastLoginAt: new Date().toISOString() });
+      if (user) onUnlock({ ...user, lastLoginAt: new Date().toISOString() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذّر تسجيل الدخول. تحقق من الاتصال وحاول مجدداً.');
+      setError(getGoogleSignInErrorMessage(err));
     } finally {
       setIsSigningIn(false);
     }
@@ -103,6 +122,30 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
             </span>
           </div>
 
+          {!isOnline && (
+            <div role="status" className="rounded-2xl bg-amber-500/10 border border-amber-400/25 p-3 text-xs text-amber-100 leading-6 flex gap-2.5">
+              <WifiOff size={16} className="text-amber-300 shrink-0 mt-1" />
+              <span>أنت دون اتصال. يمكن استئناف حساب سبق تسجيله على هذا الجهاز؛ أما أول تسجيل دخول فيحتاج إلى الإنترنت.</span>
+            </div>
+          )}
+
+          {isCheckingSavedSession && !savedSessionUser && (
+            <div role="status" className="rounded-2xl bg-white/[0.05] border border-white/[0.08] p-3 text-xs text-zinc-300">
+              جارٍ التحقق من جلسة Google المحفوظة على هذا الجهاز…
+            </div>
+          )}
+
+          {savedSessionUser && (
+            <button
+              type="button"
+              onClick={onResumeSavedSession}
+              disabled={isCheckingSavedSession}
+              className="w-full min-h-12 rounded-2xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-100 hover:bg-emerald-500/15 font-bold text-sm transition-colors disabled:opacity-50"
+            >
+              متابعة باسم {savedSessionUser.displayName} {isOnline ? '' : 'دون اتصال'}
+            </button>
+          )}
+
           {currentClosure && (
             <div className="flex items-center gap-2 text-[11px] text-zinc-400">
               <Clock3 size={14} />
@@ -110,28 +153,32 @@ export const AppleWelcomeLockScreen: React.FC<AppleWelcomeLockScreenProps> = ({
             </div>
           )}
 
-          {error && (
+          {(error || authRestoreError) && (
             <div role="alert" className="rounded-2xl bg-rose-500/10 border border-rose-500/30 p-3 text-xs text-rose-200 flex items-start gap-2">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
-              <span>{error}</span>
+              <span>{error || authRestoreError}</span>
             </div>
           )}
 
           <button
             type="button"
             onClick={handleGoogleSignIn}
-            disabled={isSigningIn}
+            disabled={isSigningIn || !isOnline}
             className="w-full min-h-14 rounded-2xl bg-gradient-to-r from-amber-500 via-[#C49746] to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm shadow-xl shadow-amber-500/20 transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-wait"
           >
             {isSigningIn ? (
               <><span className="w-5 h-5 rounded-full border-2 border-slate-950 border-t-transparent animate-spin" /><span>جارٍ التحقق من الحساب والصلاحية…</span></>
             ) : (
-              <><span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-base font-black text-[#4285F4]">G</span><span>المتابعة باستخدام Google</span></>
+              <><span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-base font-black text-[#4285F4]">G</span><span>{isOnline ? 'المتابعة باستخدام Google' : 'يتطلب أول دخول اتصالًا بالإنترنت'}</span></>
             )}
           </button>
 
+          <p className="text-[10px] text-zinc-400 text-center leading-5">
+            إذا فتحت الرابط داخل واتساب أو متصفح مضمّن، اضغط رمز الفتح الخارجي أعلى الشاشة واختر Chrome أو Safari؛ بعض المتصفحات المضمّنة تمنع تسجيل Google.
+          </p>
+
           <p className="text-[10px] text-zinc-500 text-center leading-5">
-            إذا لم يكن بريدك مضافاً، اطلب من مالك المتجر ربط حساب Google بدورك قبل الدخول.
+            للعمل دون اتصال، افتح الموقع مرة بالإنترنت وسجّل الدخول وانتظر تحميل بيانات المتجر. استعمل هذه الميزة على جهازك الموثوق فقط، ولا تسجل الخروج قبل مزامنة التغييرات.
           </p>
         </section>
       </main>

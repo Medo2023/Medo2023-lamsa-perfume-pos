@@ -140,10 +140,16 @@ import {
   deleteSavedMixCloud,
   isVirtualDemoCustomer,
   posRealtimeChannel,
-  signOutFirebaseUser
+  signOutFirebaseUser,
+  loadAuthorizedAppUser,
+  onFirebaseAuthStateChanged,
+  getGoogleRedirectResult,
+  getCurrentFirebaseUser,
+  getGoogleSignInErrorMessage,
+  isTransientFirebaseError
 } from './services/firebase';
 import { canAccessView } from './services/authService';
-import { Lock } from 'lucide-react';
+import { Lock, WifiOff } from 'lucide-react';
 
 // Seed Data
 const INITIAL_PRODUCTS: Product[] = [
@@ -793,9 +799,34 @@ const App: React.FC = () => {
     return getLocalStrategicOrders();
   });
 
-  const [isCloudConnected, setIsCloudConnected] = useState<boolean>(true);
+  const [isCloudConnected, setIsCloudConnectedValue] = useState<boolean>(
+    () => typeof navigator === 'undefined' || navigator.onLine
+  );
+  const setIsCloudConnected = (connected: boolean) => {
+    setIsCloudConnectedValue(connected && (typeof navigator === 'undefined' || navigator.onLine));
+  };
+  const [savedSessionUser, setSavedSessionUser] = useState<AppUser | null>(null);
+  const [isCheckingSavedSession, setIsCheckingSavedSession] = useState(true);
+  const [authRestoreError, setAuthRestoreError] = useState<string | null>(null);
+  const [cloudSyncError, setCloudSyncError] = useState(false);
   const [isOwnerLiveRadarOpen, setIsOwnerLiveRadarOpen] = useState<boolean>(false);
   const [isPWAInstallModalOpen, setIsPWAInstallModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    const updateNetworkStatus = () => setIsCloudConnectedValue(navigator.onLine);
+    window.addEventListener('online', updateNetworkStatus);
+    window.addEventListener('offline', updateNetworkStatus);
+    return () => {
+      window.removeEventListener('online', updateNetworkStatus);
+      window.removeEventListener('offline', updateNetworkStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleCloudSyncError = () => setCloudSyncError(true);
+    window.addEventListener('lamsa-cloud-sync-error', handleCloudSyncError);
+    return () => window.removeEventListener('lamsa-cloud-sync-error', handleCloudSyncError);
+  }, []);
 
   // Track known remote event IDs to trigger real-time sound & system notifications when new records arrive from other devices
   const isInitialSalesLoadedRef = useRef<boolean>(false);
@@ -1630,6 +1661,9 @@ const App: React.FC = () => {
   const handleLoginSuccess = (user: AppUser) => {
     const cleanUser: AppUser = sanitizeUserAccount(user);
     setCurrentUser(cleanUser);
+    setSavedSessionUser(cleanUser);
+    setAuthRestoreError(null);
+    setCloudSyncError(false);
     setIsScreenLocked(false);
     if (cleanUser.role !== 'OWNER') {
       setExpenses([]);
@@ -1649,14 +1683,71 @@ const App: React.FC = () => {
     );
   };
 
+  useEffect(() => {
+    let active = true;
+    let restoreAttempt = 0;
+
+    const restoreSavedSession = async (firebaseUser: Parameters<typeof loadAuthorizedAppUser>[0]) => {
+      const attempt = ++restoreAttempt;
+      setIsCheckingSavedSession(true);
+      try {
+        const appUser = await loadAuthorizedAppUser(firebaseUser);
+        if (!active || attempt !== restoreAttempt) return;
+        setSavedSessionUser(sanitizeUserAccount(appUser));
+        setAuthRestoreError(null);
+      } catch (error) {
+        if (!active || attempt !== restoreAttempt) return;
+        if (isTransientFirebaseError(error)) {
+          setAuthRestoreError('تعذر تحميل صلاحيات الحساب المحفوظة. اتصل بالإنترنت وسجّل الدخول مرة واحدة على هذا الجهاز أولاً.');
+        } else {
+          setSavedSessionUser(null);
+          setAuthRestoreError(getGoogleSignInErrorMessage(error));
+          signOutFirebaseUser().catch(() => {});
+        }
+      } finally {
+        if (active && attempt === restoreAttempt) setIsCheckingSavedSession(false);
+      }
+    };
+
+    const unsubscribe = onFirebaseAuthStateChanged((firebaseUser) => {
+      if (!firebaseUser) {
+        restoreAttempt += 1;
+        setSavedSessionUser(null);
+        setAuthRestoreError(null);
+        setIsCheckingSavedSession(false);
+        return;
+      }
+      void restoreSavedSession(firebaseUser);
+    });
+
+    const retryWhenOnline = () => {
+      const firebaseUser = getCurrentFirebaseUser();
+      if (firebaseUser) void restoreSavedSession(firebaseUser);
+    };
+    window.addEventListener('online', retryWhenOnline);
+    getGoogleRedirectResult().catch((error) => {
+      if (active) setAuthRestoreError(getGoogleSignInErrorMessage(error));
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+      window.removeEventListener('online', retryWhenOnline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) setSavedSessionUser(currentUser);
+  }, [currentUser]);
+
   const handleLockScreen = () => {
+    if (currentUser) setSavedSessionUser(currentUser);
     setIsScreenLocked(true);
     setCurrentUser(null);
     setExpenses([]);
     setVaults([]);
     setWithdrawals([]);
     setAuditLogs([]);
-    signOutFirebaseUser().catch(err => console.error('Firebase sign-out error:', err));
     try {
       sessionStorage.removeItem('lamsa_unlocked_session_v1');
     } catch {}
@@ -1664,6 +1755,8 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     handleLockScreen();
+    setSavedSessionUser(null);
+    signOutFirebaseUser().catch(err => console.error('Firebase sign-out error:', err));
   };
 
   // Production batch save handler (سجل التشغيل والتعتيق)
@@ -2603,6 +2696,12 @@ const App: React.FC = () => {
           users={users}
           currentClosure={currentClosure}
           onUnlock={handleLoginSuccess}
+          savedSessionUser={savedSessionUser}
+          isCheckingSavedSession={isCheckingSavedSession}
+          authRestoreError={authRestoreError}
+          onResumeSavedSession={() => {
+            if (savedSessionUser) handleLoginSuccess({ ...savedSessionUser, lastLoginAt: new Date().toISOString() });
+          }}
           onUpdateUser={handleSaveUser}
           storeName={settings.storeName || 'لَمْسَةُ عِطْر'}
           storeSlogan={settings.storeSlogan || 'فخامة العطور الشرقية والفرنسية'}
@@ -2613,6 +2712,19 @@ const App: React.FC = () => {
 
   return (
     <div className="apple-theme-shell min-h-screen max-w-full overflow-x-hidden bg-[#F5F5F7] text-[#1D1D1F] font-sans antialiased">
+      {!isCloudConnected && (
+        <div role="status" className="fixed bottom-20 left-3 right-3 z-[140] mx-auto flex max-w-lg items-center justify-center gap-2 rounded-2xl border border-amber-400/30 bg-zinc-950/95 px-4 py-3 text-center text-xs font-semibold text-amber-100 shadow-2xl sm:bottom-4">
+          <WifiOff size={16} className="shrink-0 text-amber-300" />
+          <span>وضع دون اتصال — تُحفظ التغييرات على هذا الجهاز وتُزامن عند عودة الإنترنت. لا تسجّل الخروج قبل المزامنة.</span>
+        </div>
+      )}
+      {cloudSyncError && (
+        <div role="alert" className="fixed bottom-36 left-3 right-3 z-[141] mx-auto flex max-w-lg items-center justify-between gap-3 rounded-2xl border border-rose-400/40 bg-zinc-950/95 px-4 py-3 text-xs font-semibold text-rose-100 shadow-2xl sm:bottom-20">
+          <span>تعذرت مزامنة بعض التغييرات. تحقق من الاتصال وصلاحيات الحساب؛ تبقى نسخة هذا الجهاز محفوظة.</span>
+          <button type="button" aria-label="إغلاق التنبيه" onClick={() => setCloudSyncError(false)} className="shrink-0 rounded-lg px-2 py-1 text-rose-200 hover:bg-white/10">إغلاق</button>
+        </div>
+      )}
+
       {/* Interactive Typing Shake, Color Sparkle & Acoustic Controller */}
       <InteractiveTypingController settings={settings} />
 
